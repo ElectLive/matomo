@@ -167,6 +167,7 @@ class Transitions extends \Piwik\Plugin
         $translationKeys[] = 'Transitions_PreprocessedPagesLimitReachedHelp';
         $translationKeys[] = 'Transitions_ManagePreprocessedPages';
         $translationKeys[] = 'Transitions_PreprocessedPageAddedRebuild';
+        $translationKeys[] = 'Transitions_PreprocessedPageAddedRebuildOneMonth';
         $translationKeys[] = 'Transitions_PreprocessedPageAddedNewDataOnly';
         $translationKeys[] = 'Transitions_PreprocessedTransitions';
         $translationKeys[] = 'Transitions_PreprocessedPagesIntro';
@@ -179,6 +180,7 @@ class Transitions extends \Piwik\Plugin
         $translationKeys[] = 'Transitions_PreprocessedPageAlreadySelected';
         $translationKeys[] = 'Transitions_PreprocessedPageDuplicateHelp';
         $translationKeys[] = 'Transitions_PreprocessedPagesRebuildHint';
+        $translationKeys[] = 'Transitions_PreprocessedPagesRebuildHintOneMonth';
         $translationKeys[] = 'Transitions_PreprocessedPagesNewDataOnlyHint';
         $translationKeys[] = 'Transitions_PreprocessedPagesSuggestions';
         $translationKeys[] = 'Transitions_AddPageUrl';
