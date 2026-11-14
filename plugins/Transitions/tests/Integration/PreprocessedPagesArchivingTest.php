@@ -607,7 +607,8 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
 
         $report = ['pageMetrics' => []];
         foreach (['loops', 'pageviews', 'entries', 'exits'] as $metric) {
-            $report['pageMetrics'][$metric] = (int) $numerics[$numericNames[$metric]];
+            // entries are counted from the referrers below, as the report does
+            $report['pageMetrics'][$metric] = $metric === 'entries' ? 0 : (int) $numerics[$numericNames[$metric]];
         }
         foreach (Records::ACTION_LISTS as $list) {
             $report[$list] = $this->getCounts($archive->getDataTable(Records::getRecordName($idPage, $list)), Metrics::INDEX_NB_ACTIONS);
@@ -630,6 +631,7 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
             ];
         }
         ksort($report['referrers']);
+        $report['pageMetrics']['entries'] = array_sum(array_column($report['referrers'], 'visits'));
 
         return $report;
     }

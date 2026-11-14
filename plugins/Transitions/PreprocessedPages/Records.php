@@ -39,7 +39,6 @@ final class Records
 
     public const PAGEVIEWS = 'pageviews';
     public const LOOPS = 'loops';
-    public const ENTRIES = 'entries';
     public const EXITS = 'exits';
     public const DAYS = 'days';
 
@@ -58,7 +57,6 @@ final class Records
     public const NUMERICS = [
         self::PAGEVIEWS,
         self::LOOPS,
-        self::ENTRIES,
         self::EXITS,
         self::DAYS,
     ];

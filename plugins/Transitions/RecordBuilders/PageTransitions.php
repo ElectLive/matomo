@@ -278,12 +278,10 @@ class PageTransitions extends RecordBuilder
             }
         }
 
-        $entries = 0;
-        $records[Records::getRecordName($idPage, Records::REFERRERS)] = $this->makeReferrersTable($externalReferrers, $entries);
+        $records[Records::getRecordName($idPage, Records::REFERRERS)] = $this->makeReferrersTable($externalReferrers);
 
         $records[Records::getRecordName($idPage, Records::PAGEVIEWS)] = $pageviews;
         $records[Records::getRecordName($idPage, Records::LOOPS)] = $loops;
-        $records[Records::getRecordName($idPage, Records::ENTRIES)] = $entries;
         $records[Records::getRecordName($idPage, Records::EXITS)] = $pageviews - $transitionsToFollowingActions - $loops;
         if ($hasVisits) {
             $records[Records::getRecordName($idPage, Records::DAYS)] = 1;
@@ -317,9 +315,8 @@ class PageTransitions extends RecordBuilder
 
     /**
      * @param array<mixed> $rowsByReferrerType rows of the ranking query
-     * @param int $entries incremented by the visits of all rows
      */
-    private function makeReferrersTable(array $rowsByReferrerType, int &$entries): DataTable
+    private function makeReferrersTable(array $rowsByReferrerType): DataTable
     {
         $table = new DataTable();
         foreach (Model::REFERRER_TYPES as $referrerType) {
@@ -352,8 +349,6 @@ class PageTransitions extends RecordBuilder
             if ($referrers->getRowsCount() > 0) {
                 $referrerTypeRow->setSubtable($referrers);
             }
-
-            $entries += $visits;
         }
 
         return $table;
