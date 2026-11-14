@@ -405,6 +405,70 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame([7.5], $model->timeLimits);
     }
 
+    /**
+     * @dataProvider getBuildLockTtls
+     */
+    public function testTheBuildLockOutlastsTheTimeLimitedQueriesAndIsExtendedBetweenTheBuildSteps(float $timeLimit, int $ttl): void
+    {
+        Config::getInstance()->General['live_query_max_execution_time'] = $timeLimit;
+        $this->selectPage(self::PAGE_URL);
+        $backend = new class (StaticContainer::get(LockBackend::class)) implements LockBackend {
+            /**
+             * @var array{acquired: list<int>, extended: list<int>}
+             */
+            public array $ttls = ['acquired' => [], 'extended' => []];
+
+            public function __construct(private readonly LockBackend $backend)
+            {
+            }
+
+            public function getKeysMatchingPattern($pattern)
+            {
+                return $this->backend->getKeysMatchingPattern($pattern);
+            }
+
+            public function setIfNotExists($lockKey, $lockValue, $ttlInSeconds)
+            {
+                $this->ttls['acquired'][] = $ttlInSeconds;
+
+                return $this->backend->setIfNotExists($lockKey, $lockValue, $ttlInSeconds);
+            }
+
+            public function get($lockKey)
+            {
+                return $this->backend->get($lockKey);
+            }
+
+            public function deleteIfKeyHasValue($lockKey, $lockValue)
+            {
+                return $this->backend->deleteIfKeyHasValue($lockKey, $lockValue);
+            }
+
+            public function expireIfKeyHasValue($lockKey, $lockValue, $ttlInSeconds)
+            {
+                $this->ttls['extended'][] = $ttlInSeconds;
+
+                return $this->backend->expireIfKeyHasValue($lockKey, $lockValue, $ttlInSeconds);
+            }
+        };
+        $this->setLoader(10000, StoredRecordsLoader::MAX_SUMMED_PERIODS, $backend);
+
+        self::assertSame(1, $this->request('day', self::DAY)['preprocessed']);
+        self::assertSame(['acquired' => [$ttl], 'extended' => [$ttl, $ttl]], $backend->ttls);
+    }
+
+    /**
+     * @return array<string, array{float, int}>
+     */
+    public function getBuildLockTtls(): array
+    {
+        return [
+            'no time limit' => [-1.0, 300],
+            'a short time limit' => [7.5, 300],
+            'a long time limit' => [200.0, 660],
+        ];
+    }
+
     public function testWithCronArchivingNoDayIsBuiltAlsoWithBrowserArchivingEnabled(): void
     {
         $raw = $this->request('day', self::DAY);
@@ -722,12 +786,15 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         );
     }
 
-    private function setLoader(int $maxLockWaitMilliseconds, int $maxSummedPeriods = StoredRecordsLoader::MAX_SUMMED_PERIODS): void
-    {
+    private function setLoader(
+        int $maxLockWaitMilliseconds,
+        int $maxSummedPeriods = StoredRecordsLoader::MAX_SUMMED_PERIODS,
+        ?LockBackend $lockBackend = null
+    ): void {
         StaticContainer::getContainer()->set(StoredRecordsLoader::class, new StoredRecordsLoader(
             StaticContainer::get(StoredRecordsReader::class),
             StaticContainer::get(Service::class),
-            StaticContainer::get(LockBackend::class),
+            $lockBackend ?? StaticContainer::get(LockBackend::class),
             StaticContainer::get(LoggerInterface::class),
             $maxLockWaitMilliseconds,
             $maxSummedPeriods

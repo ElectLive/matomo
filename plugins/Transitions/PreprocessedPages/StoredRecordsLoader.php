@@ -56,7 +56,15 @@ final class StoredRecordsLoader
 
     private const LOCK_NAMESPACE = 'Transitions.buildPreprocessedDay.';
 
-    private const LOCK_TTL_SECONDS = 120;
+    /**
+     * A build lock lasts at least as long as a build isn't tried again, and is extended between the build's steps.
+     */
+    private const LOCK_TTL_SECONDS = self::MIN_RETRY_AFTER_SECONDS;
+
+    /**
+     * The most time limited queries in one build step: the page's log queries.
+     */
+    private const MAX_QUERIES_PER_BUILD_STEP = 3;
 
     private const LOCK_POLL_MILLISECONDS = 100;
 
@@ -405,9 +413,14 @@ final class StoredRecordsLoader
             return false;
         }
 
+        // all queries, the visits of the day too, get the time limit of the report's log queries, and the lock
+        // outlasts the queries of a step
+        $timeLimit = GeneralConfig::getFloatConfigValue('live_query_max_execution_time', -1.0);
+        $lockTtl = max(self::LOCK_TTL_SECONDS, (int) ceil(self::MAX_QUERIES_PER_BUILD_STEP * $timeLimit) + 60);
+
         $lock = new Lock($this->lockBackend, self::LOCK_NAMESPACE);
         $lockId = $idSite . '.' . $idPage . '.' . $day->getDateStart()->toString() . '.' . $segment->getHash();
-        if (!$this->acquireLock($lock, $lockId)) {
+        if (!$this->acquireLock($lock, $lockId, $lockTtl)) {
             return $isRefresh;
         }
 
@@ -428,7 +441,7 @@ final class StoredRecordsLoader
             }
             $cache->save($attemptId, 1, max(self::MIN_RETRY_AFTER_SECONDS, $this->getRefreshAfter($idSite)));
 
-            $this->archiveDay($site, $day, $segment, $idPage);
+            $this->archiveDay($site, $day, $segment, $idPage, $timeLimit, fn() => $lock->extendLock($lockTtl));
             $cache->delete($attemptId);
         } catch (\Throwable $e) {
             // the stored records, if any, are served as they are
@@ -444,8 +457,10 @@ final class StoredRecordsLoader
 
     /**
      * Writes a partial archive with the page's day records, built from the logs.
+     *
+     * @param callable(): mixed $extendLock called before each step after the first
      */
-    private function archiveDay(Site $site, Period $day, Segment $segment, int $idPage): void
+    private function archiveDay(Site $site, Period $day, Segment $segment, int $idPage, float $timeLimit, callable $extendLock): void
     {
         $idSite = (int) $site->getId();
         $daySegment = new Segment(
@@ -459,21 +474,21 @@ final class StoredRecordsLoader
         $params->setRequestedPlugin('Transitions');
         $params->setArchiveOnlyReport(Records::getRebuildReportName($idPage));
 
-        // all queries, the visits of the day too, get the time limit of the report's log queries
-        $timeLimit = GeneralConfig::getFloatConfigValue('live_query_max_execution_time', -1.0);
-        PageTransitions::executeWithTimeLimit($timeLimit, function () use ($params, $timeLimit): void {
+        PageTransitions::executeWithTimeLimit($timeLimit, function () use ($params, $timeLimit, $extendLock): void {
             $archiver = new TimeLimitedPluginsArchiver($params, $timeLimit);
             $metrics = $archiver->callAggregateCoreMetrics();
+            $extendLock();
             // a day without visits gets records too, so it counts as covered
             $archiver->callAggregateAllPlugins($metrics['nb_visits'], $metrics['nb_visits_converted'], true);
+            $extendLock();
             $archiver->finalizeArchive();
         });
     }
 
-    private function acquireLock(Lock $lock, string $lockId): bool
+    private function acquireLock(Lock $lock, string $lockId, int $ttl): bool
     {
         $waited = 0;
-        while (!$lock->acquireLock($lockId, self::LOCK_TTL_SECONDS)) {
+        while (!$lock->acquireLock($lockId, $ttl)) {
             if ($waited >= $this->maxLockWaitMilliseconds) {
                 return false;
             }
