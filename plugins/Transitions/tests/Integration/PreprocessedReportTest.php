@@ -814,6 +814,7 @@ class PreprocessedReportTest extends IntegrationTestCase
         Db::query('RENAME TABLE ' . $table . ' TO ' . $table . '_hidden');
         try {
             self::assertFalse($dao->hasPagesForSite(1));
+            self::assertFalse($dao->hasAnyPagesForSite(1));
             self::assertSame(0, StaticContainer::get(Service::class)->getPageStatus(1, self::PAGE_URL)['used']);
 
             Cache::getTransientCache()->flushAll();
@@ -911,8 +912,16 @@ class PreprocessedReportTest extends IntegrationTestCase
         try {
             self::assertStringContainsString('piwik.transitionsHasPreprocessedPages = false;', $this->getJsGlobals());
 
-            $this->selectPage(self::PAGE_URL);
+            $idPage = $this->selectPage(self::PAGE_URL);
             self::assertStringContainsString('piwik.transitionsHasPreprocessedPages = true;', $this->getJsGlobals());
+
+            // a removed page's stored records are still served
+            API::getInstance()->removePreprocessedPage(1, $idPage);
+            self::assertStringContainsString('piwik.transitionsHasPreprocessedPages = true;', $this->getJsGlobals());
+
+            $_GET['idSite'] = 2;
+            self::assertStringContainsString('piwik.transitionsHasPreprocessedPages = false;', $this->getJsGlobals());
+            $_GET['idSite'] = 1;
 
             FakeAccess::clearAccess(false, [], [], 'anonymous');
             self::assertStringContainsString('piwik.transitionsHasPreprocessedPages = false;', $this->getJsGlobals());

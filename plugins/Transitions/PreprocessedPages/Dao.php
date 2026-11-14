@@ -94,6 +94,18 @@ class Dao
     }
 
     /**
+     * Like hasPagesForSite(), but also true when all of the website's pages were removed, whose stored records are
+     * still served.
+     */
+    public function hasAnyPagesForSite(int $idSite): bool
+    {
+        return (bool) $this->readIfTableExists(
+            fn() => Db::fetchOne('SELECT 1 FROM ' . $this->getTable() . ' WHERE idsite = ? LIMIT 1', [$idSite]),
+            false
+        );
+    }
+
+    /**
      * @return list<int> the idpages of the website's pages removed at or after the given UTC time
      */
     public function getPageIdsRemovedSince(int $idSite, string $removedSince): array

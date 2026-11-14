@@ -203,9 +203,9 @@ class Transitions extends \Piwik\Plugin
 
         $out .= '    piwik.transitionsMaxPeriodAllowed = "' . ($maxPeriodAllowed ? $maxPeriodAllowed : 'all') . '"' . "\n";
 
-        // pre-processed pages can be served beyond the period limit; only whether there are any is exposed
+        // pre-processed pages, also removed ones, can be served beyond the period limit; only whether there are any is exposed
         $hasPreprocessedPages = Piwik::isUserHasViewAccess($idSite)
-            && StaticContainer::get(PreprocessedPagesDao::class)->hasPagesForSite($idSite);
+            && StaticContainer::get(PreprocessedPagesDao::class)->hasAnyPagesForSite($idSite);
         $out .= '    piwik.transitionsHasPreprocessedPages = ' . ($hasPreprocessedPages ? 'true' : 'false') . ';' . "\n";
     }
 
