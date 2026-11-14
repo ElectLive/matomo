@@ -41,6 +41,7 @@ class Transitions extends \Piwik\Plugin
     public function activate()
     {
         StaticContainer::get(PreprocessedPagesDao::class)->cleanUpDeletedUsersAndSites();
+        ArchivingMode::forgetDeletedSites();
     }
 
     public function anonymizePreprocessedPagesCreatedBy(string $userLogin): void

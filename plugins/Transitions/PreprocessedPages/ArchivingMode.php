@@ -16,6 +16,7 @@ use Piwik\Container\StaticContainer;
 use Piwik\CronArchive;
 use Piwik\Date;
 use Piwik\Option;
+use Piwik\Plugins\SitesManager\Model as SitesModel;
 
 /**
  * Whether a website's reports are archived by cron (`core:archive`) or by browser requests only.
@@ -75,5 +76,19 @@ final class ArchivingMode
     public static function forgetSite(int $idSite): void
     {
         Option::delete(self::OPTION_PREFIX . $idSite);
+    }
+
+    /**
+     * Forgets the websites deleted while the plugin was deactivated.
+     */
+    public static function forgetDeletedSites(): void
+    {
+        $idSites = array_map('intval', StaticContainer::get(SitesModel::class)->getSitesId());
+        foreach (array_keys(Option::getLike(self::OPTION_PREFIX . '%')) as $name) {
+            $name = (string) $name;
+            if (!in_array((int) substr($name, strlen(self::OPTION_PREFIX)), $idSites, true)) {
+                Option::delete($name);
+            }
+        }
     }
 }

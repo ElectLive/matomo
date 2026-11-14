@@ -24,9 +24,11 @@ use Piwik\Exception\ThingNotFoundException;
 use Piwik\Exception\UnexpectedWebsiteFoundException;
 use Piwik\Http\BadRequestException;
 use Piwik\NoAccessException;
+use Piwik\Option;
 use Piwik\Plugin\Manager as PluginManager;
 use Piwik\Plugins\SitesManager\API as SitesManagerAPI;
 use Piwik\Plugins\Transitions\API;
+use Piwik\Plugins\Transitions\PreprocessedPages\ArchivingMode;
 use Piwik\Plugins\Transitions\PreprocessedPages\Dao;
 use Piwik\Plugins\Transitions\PreprocessedPages\PreprocessedPagesBusyException;
 use Piwik\Plugins\Transitions\PreprocessedPages\Records;
@@ -568,6 +570,8 @@ class PreprocessedPagesTest extends IntegrationTestCase
         $this->api->addPreprocessedPage(1, 'https://example.com/a');
         $this->api->addPreprocessedPage(2, 'https://example.org/a');
         $this->setRole('superuser', 1);
+        ArchivingMode::rememberCronArchiving(1);
+        ArchivingMode::rememberCronArchiving(2);
 
         // as if the plugin was deactivated while the user and the site were deleted
         Db::query('DELETE FROM ' . Common::prefixTable('user') . ' WHERE login = ?', ['alice']);
@@ -577,6 +581,8 @@ class PreprocessedPagesTest extends IntegrationTestCase
 
         self::assertSame([null], array_column($this->api->getPreprocessedPages(1), 'created_by'));
         self::assertSame(0, (int) Db::fetchOne('SELECT COUNT(*) FROM ' . Common::prefixTable('transitions_preprocessed_page') . ' WHERE idsite = 2'));
+        Option::clearCache();
+        self::assertSame(['Transitions.lastCronArchiving_1'], array_keys(Option::getLike('Transitions.lastCronArchiving%')));
     }
 
     public function testAddingAPageSchedulesReArchivingOfOnlyThatPage(): void
