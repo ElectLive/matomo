@@ -65,7 +65,7 @@ describe('Transitions/TransitionsReport beyond the period limit', () => {
     expect(wrapper.find('.transitionsSourceHeader__toggle').text())
       .toContain('Transitions_PreprocessThisPage');
     expect(wrapper.find('.transitionsSourceHeader__usage').text())
-      .toBe('Transitions_PreprocessedPagesUsageShort:2|20');
+      .toBe('Transitions_PreprocessedPagesUsage:2|20');
     // nothing was served, so there is no source to point out
     expect(wrapper.find('.transitionsSourceHeader__badge').exists()).toBe(false);
     // the header stays from the report's start, so the status is read once

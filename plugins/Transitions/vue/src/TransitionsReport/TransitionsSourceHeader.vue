@@ -101,16 +101,16 @@
       </div>
     </div>
 
-    <p
+    <div
       v-if="message"
       class="transitionsSourceHeader__message"
       role="status"
-    >{{ message }}</p>
-    <p
+    >{{ message }}</div>
+    <div
       v-if="error"
       class="transitionsSourceHeader__error"
       role="alert"
-    >{{ error }}</p>
+    >{{ error }}</div>
   </div>
 </template>
 
@@ -276,7 +276,7 @@ export default defineComponent({
     },
     usageLabel(): string {
       return translate(
-        'Transitions_PreprocessedPagesUsageShort',
+        'Transitions_PreprocessedPagesUsage',
         NumberFormatter.formatNumber(this.status?.used ?? 0),
         NumberFormatter.formatNumber(this.status?.limit ?? 0),
       );

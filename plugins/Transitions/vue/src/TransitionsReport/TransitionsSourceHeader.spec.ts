@@ -293,7 +293,7 @@ describe('Transitions/TransitionsSourceHeader', () => {
       expect(wrapper.find('.transitionsSourceHeader__toggle').text()).toContain('Transitions_PreprocessThisPage');
       expect(wrapper.find('.transitionsSourceHeader__toggle').attributes('disabled')).toBeUndefined();
       expect(wrapper.find('.transitionsSourceHeader__usage').text())
-        .toBe('Transitions_PreprocessedPagesUsageShort:12|20');
+        .toBe('Transitions_PreprocessedPagesUsage:12|20');
       expect(wrapper.find('.transitionsSourceHeader__manageLink').exists()).toBe(false);
     });
 
@@ -427,7 +427,7 @@ describe('Transitions/TransitionsSourceHeader', () => {
       expect(wrapper.find('.transitionsSourceHeader__confirm').exists()).toBe(false);
       expect(wrapper.find('.transitionsSourceHeader__toggle').text()).toContain('Transitions_PreprocessThisPage');
       expect(wrapper.find('.transitionsSourceHeader__usage').text())
-        .toBe('Transitions_PreprocessedPagesUsageShort:11|20');
+        .toBe('Transitions_PreprocessedPagesUsage:11|20');
     });
 
     it('should show the URL of the confirmation decoded, as the page selector sends it encoded', async () => {
@@ -506,7 +506,7 @@ describe('Transitions/TransitionsSourceHeader', () => {
       expect(wrapper.find('.transitionsSourceHeader__confirm').exists()).toBe(false);
       expect(wrapper.find('.transitionsSourceHeader__toggle').text()).toContain('Transitions_PreprocessThisPage');
       expect(wrapper.find('.transitionsSourceHeader__usage').text())
-        .toBe('Transitions_PreprocessedPagesUsageShort:11|20');
+        .toBe('Transitions_PreprocessedPagesUsage:11|20');
       // data already stored is still what this report shows
       expect(wrapper.find('.transitionsSourceHeader__badge').text()).toBe('Transitions_PreprocessedBadge');
     });
