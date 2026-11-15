@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Piwik\Plugins\Transitions\tests\Integration;
 
+use Piwik\Access;
+use Piwik\Archive;
 use Piwik\Archive\ArchiveInvalidator;
 use Piwik\ArchiveProcessor\Rules;
 use Piwik\Common;
@@ -36,8 +38,11 @@ use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
 
 /**
  * `core:archive` with pre-processed pages: two websites with the same visits, of which only the first selects pages,
- * and a pre-processed segment. The visits are on days of the month before last, so only archives of periods holding
- * today or yesterday are archived again by every run.
+ * a pre-processed segment, and range archives as browsers and `core:archive` build them. The visits are on days of the
+ * month before last, so only archives of periods holding today or yesterday are archived again by every run.
+ *
+ * The clock of the test is fixed at the time the fixture was built, so its days don't change during a run. The
+ * archiving requests run with the real clock, which only matters for the periods holding today or yesterday.
  *
  * @group Transitions
  * @group PreprocessedCronArchivingTest
@@ -51,10 +56,17 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
     private const NEW_PAGE_URL = 'https://example.org/page/three.html';
     private const REARCHIVE_MONTHS = 'last3';
 
+    /**
+     * @var int|null
+     */
+    private static $now = null;
+
     protected static function beforeTableDataCached()
     {
         parent::beforeTableDataCached();
 
+        self::$now = time();
+        Date::$now = self::$now;
         Fixture::createSuperUser();
         // archived by core:archive only
         Config::getInstance()->General['enable_browser_archiving_triggering'] = 0;
@@ -75,6 +87,7 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
         (new ReArchiveList())->setAll([]);
 
         self::runCoreArchive();
+        self::archiveRanges();
     }
 
     public function tearDown(): void
@@ -87,6 +100,8 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
     public function setUp(): void
     {
         parent::setUp();
+
+        Date::$now = self::$now;
 
         Config::getInstance()->General['rearchive_reports_in_past_last_n_months'] = self::REARCHIVE_MONTHS;
         Config::getInstance()->General['enable_browser_archiving_triggering'] = 0;
@@ -129,6 +144,7 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
     public function testAddingAPageInvalidatesOnlyItsRecordsForAllSegmentsWithinTheWindow(): void
     {
         $before = $this->getInvalidations();
+        $archivesBefore = $this->getArchiveRows(fn(array $row) => true);
 
         $idPage = API::getInstance()->addPreprocessedPage(1, self::NEW_PAGE_URL)['idpage'];
         $report = Records::getRebuildReportName($idPage);
@@ -138,6 +154,10 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
         self::assertSame($before, $this->getInvalidations());
 
         StaticContainer::get(ArchiveInvalidator::class)->applyScheduledReArchiving();
+
+        // no archive is marked invalidated, the ranges of every plugin included
+        self::assertSame($archivesBefore, $this->getArchiveRows(fn(array $row) => true));
+        self::assertNotEmpty(array_filter($archivesBefore, fn(array $row) => (int) $row['period'] === 5));
 
         $added = array_values(array_diff_key($this->getInvalidations(), $before));
         self::assertNotEmpty($added);
@@ -180,12 +200,20 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
         self::assertSame(array_filter($before, $isUntouchable), $after);
         self::assertNotEmpty($after);
 
-        // no archive for all plugins was invalidated
-        self::assertSame(0, (int) Db::fetchOne(
-            'SELECT COUNT(*) FROM ' . ArchiveTableCreator::getNumericTable(self::getFirstDay(), false)
-            . " WHERE name LIKE 'done%' AND name NOT LIKE '%.%' AND value IN (?, ?)",
-            [ArchiveWriter::DONE_INVALIDATED, ArchiveWriter::DONE_ERROR_INVALIDATED]
-        ));
+        // the ranges are among them
+        self::assertNotEmpty(array_filter($after, fn(array $row) => (int) $row['period'] === 5 && $row['done'] === 'done'));
+        self::assertNotEmpty(array_filter($after, fn(array $row) => (int) $row['period'] === 5 && $row['done'] === 'done.VisitsSummary'));
+
+        // no archive of another plugin, or for all plugins, of any table was invalidated
+        foreach (ArchiveTableCreator::getTablesArchivesInstalled(ArchiveTableCreator::NUMERIC_TABLE) as $numericTable) {
+            self::assertSame(0, (int) Db::fetchOne(
+                'SELECT COUNT(*) FROM ' . $numericTable . " WHERE name LIKE 'done%' AND name NOT LIKE '%.Transitions' AND value IN (?, ?)",
+                [ArchiveWriter::DONE_INVALIDATED, ArchiveWriter::DONE_ERROR_INVALIDATED]
+            ), $numericTable);
+        }
+
+        // the archives of today's and yesterday's periods, such as this year's, hold the same as without pages
+        self::assertSame($this->getArchivedRecords(2), $this->withoutTransitionsRecords($this->getArchivedRecords(1)));
 
         // the page's records are built in partial archives, for all visits and the segment
         $segmentDoneFlag = Rules::getDoneFlagArchiveContainsOnePlugin(new Segment(self::SEGMENT, [1]), 'Transitions');
@@ -225,7 +253,7 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
 
         API::getInstance()->addPreprocessedPage(1, self::NEW_PAGE_URL);
         // core:archive applies a remembered date only once the day's archive is older than its time to live
-        Date::$now = time() + 3600;
+        Date::$now = self::$now + 3600;
         self::runCoreArchive();
 
         foreach ([1, 2] as $idSite) {
@@ -241,9 +269,88 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
         self::assertSame($this->getArchivedRecords(2), $this->withoutTransitionsRecords($this->getArchivedRecords(1)));
     }
 
+    /**
+     * R-A3: the page's records are archived after every other archive of the run, so they don't use up its limits
+     * before them, and an archive of the page in progress, for example in another process, doesn't hold back the
+     * other archives of the same or longer periods.
+     */
+    public function testArchivingAnAddedPageNeitherHoldsBackNorDelaysOtherArchiving(): void
+    {
+        $lateDay = self::getFirstDay();
+        $visits = [];
+        foreach ([1, 2] as $idSite) {
+            $visits[$idSite] = [
+                'day' => $this->getStoredNumeric($idSite, 'done', 'nb_visits', 'day', $lateDay),
+                'month' => $this->getStoredNumeric($idSite, 'done', 'nb_visits', 'month', $lateDay),
+            ];
+            self::trackVisit($idSite, $lateDay->toString('Y-m-d 20:00:00'), self::PAGE_URL, '', 100);
+        }
+
+        $idPage = API::getInstance()->addPreprocessedPage(1, self::NEW_PAGE_URL)['idpage'];
+        StaticContainer::get(ArchiveInvalidator::class)->applyScheduledReArchiving();
+
+        // another process archives the page's records of the day of the late visit, and never finishes
+        $inProgress = Db::query(
+            'UPDATE ' . Common::prefixTable('archive_invalidations') . ' SET status = 1, ts_started = ? WHERE idsite = 1 AND period = 1 AND date1 = ? AND name = ? AND report = ?',
+            [Date::now()->getDatetime(), $lateDay->toString(), 'done.Transitions', Records::getRebuildReportName($idPage)]
+        )->rowCount();
+        self::assertSame(1, $inProgress);
+
+        // core:archive applies a remembered date only once the day's archive is older than its time to live
+        Date::$now = self::$now + 3600;
+        $output = self::runCoreArchive();
+
+        // the late visit is archived for all plugins by this run, on both websites
+        foreach ([1, 2] as $idSite) {
+            self::assertSame($visits[$idSite]['day'] + 1, $this->getStoredNumeric($idSite, 'done', 'nb_visits', 'day', $lateDay), "site $idSite");
+            self::assertSame($visits[$idSite]['month'] + 1, $this->getStoredNumeric($idSite, 'done', 'nb_visits', 'month', $lateDay), "site $idSite");
+        }
+
+        // and every archive of the page follows every other archive of both websites
+        $processed = [];
+        foreach (explode(PHP_EOL, $output) as $line) {
+            if (preg_match('/^Processing invalidation: .*idsite = (\d+), .*name = (done[^,]*),/', $line, $matches)) {
+                $processed[] = str_ends_with($matches[2], '.Transitions') ? 'page' : 'site ' . $matches[1];
+            }
+        }
+        self::assertContains('site 2', $processed);
+        self::assertContains('page', $processed);
+        $firstPageArchive = array_search('page', $processed, true);
+        self::assertSame([], array_diff(array_slice($processed, $firstPageArchive), ['page']));
+    }
+
     private static function getFirstDay(): Date
     {
         return Date::today()->subMonth(2)->setDay(5);
+    }
+
+    /**
+     * A range archive for all plugins, as `core:archive` builds them for custom ranges, and one of a plugin, as browser
+     * archiving does, of each website.
+     */
+    private static function archiveRanges(): void
+    {
+        $firstDay = self::getFirstDay()->toString();
+        $general = Config::getInstance()->General;
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 1;
+        Rules::setBrowserTriggerArchiving(true);
+
+        try {
+            foreach ([1, 2] as $idSite) {
+                Archive::build($idSite, 'range', $firstDay . ',' . self::getFirstDay()->addDay(1)->toString())->getNumeric('nb_visits');
+                $_GET['trigger'] = 'archivephp';
+                try {
+                    Access::doAsSuperUser(function () use ($idSite, $firstDay) {
+                        Archive::build($idSite, 'range', $firstDay . ',' . self::getFirstDay()->addDay(2)->toString())->getNumeric('nb_visits');
+                    });
+                } finally {
+                    unset($_GET['trigger']);
+                }
+            }
+        } finally {
+            Config::getInstance()->General = $general;
+            Rules::setBrowserTriggerArchiving(false);
+        }
     }
 
     private static function trackVisits(int $idSite): void
@@ -276,13 +383,15 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
         }
     }
 
-    private static function runCoreArchive(): void
+    private static function runCoreArchive(): string
     {
         $logger = new FakeLogger();
         StaticContainer::getContainer()->set(LoggerInterface::class, $logger);
         $archiver = new CronArchive($logger);
         $archiver->main();
         self::assertStringNotContainsString('ERROR', $logger->output);
+
+        return $logger->output;
     }
 
     /**
