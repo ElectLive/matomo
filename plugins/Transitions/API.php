@@ -232,13 +232,13 @@ class API extends \Piwik\Plugin\API
         }
 
         // reports served from the stored lists show at most the configured rows; an invalid setting only fails
-        // requests that stored records would answer
+        // requests that stored records would answer under the default settings, others use the logs as before
         $limit = (int) $limitBeforeGrouping ?: $this->limitBeforeGrouping;
         try {
             $maxRowsServed = Records::getMaxRowsServed($idSite);
             $configError = null;
         } catch (\Exception $e) {
-            $maxRowsServed = $limit;
+            $maxRowsServed = min(Records::DEFAULT_MAX_ROWS_SERVED, Records::DEFAULT_MAX_ROWS);
             $configError = $e;
         }
         if ($limit < 1 || $limit > $maxRowsServed) {
@@ -433,7 +433,8 @@ class API extends \Piwik\Plugin\API
     }
 
     /**
-     * The rows of a stored list with the highest counts, and of equal counts the lowest labels: at most `$limit` rows,
+     * The rows of a stored list with the highest counts, and of equal counts the lowest labels, case-insensitively as
+     * archiving truncates the lists: at most `$limit` rows,
      * then `Others` with the rest and the stored summary row. Rows of equal counts can be ordered differently than by
      * the ranking query of the log query.
      *
@@ -461,7 +462,7 @@ class API extends \Piwik\Plugin\API
         }
 
         usort($rows, function (array $a, array $b): int {
-            return $b['count'] <=> $a['count'] ?: strcmp((string) $a['label'], (string) $b['label']);
+            return $b['count'] <=> $a['count'] ?: strcasecmp((string) $a['label'], (string) $b['label']);
         });
 
         $others = null;

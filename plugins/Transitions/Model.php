@@ -53,8 +53,9 @@ class Model
     private const PAGE_PARTITION_FACTOR = 256;
 
     /**
-     * The archived lists keep, of equal counts at the row limit, the lowest labels, whatever order the database
-     * returns tied rows in. The live report's queries keep their order.
+     * The archived lists keep, of equal counts at the row limit, the rows with the lowest names, whatever order the
+     * database returns tied rows in; for outlinks and downloads, whose label is the URL prefix plus the name, that isn't
+     * always the lowest label. The live report's queries keep their order.
      */
     private const ACTIONS_TIE_ORDER = '`name`, `url_prefix`';
     private const REFERRERS_ORDER = '`' . Metrics::INDEX_NB_VISITS . '` DESC, `referrer_data`';

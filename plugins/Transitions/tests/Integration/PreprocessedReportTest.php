@@ -707,6 +707,8 @@ class PreprocessedReportTest extends IntegrationTestCase
 
         self::assertSame($this->toArray($rawOther), $this->toArray($this->request('day', self::DAY, '', 0, 'all', self::OTHER_PAGE_URL)));
         self::assertNotEmpty($this->getRows(OverlayAPI::getInstance()->getFollowingPages(self::OTHER_PAGE_URL, 1, 'day', self::DAY)));
+        // more rows than served by default are answered from the logs, also for the pre-processed page
+        self::assertNotEmpty($this->getRows(OverlayAPI::getInstance()->getFollowingPages(self::PAGE_URL, 1, 'day', self::DAY)));
 
         $this->expectExceptionMessage('Invalid value for [Transitions] preprocessed_max_rows_served: expected an integer >= 1.');
         $this->request('day', self::DAY);
