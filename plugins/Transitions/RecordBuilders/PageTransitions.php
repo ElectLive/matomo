@@ -36,8 +36,8 @@ use Piwik\Tracker\Action;
 class PageTransitions extends RecordBuilder
 {
     /**
-     * The most URLs whose lists the log queries of a day rank at once: the default page limit, so a website within it
-     * is queried once.
+     * The most URLs a day's lists are built for at once, the default page limit. Each log query splits them further
+     * by the ranking partitions a URL needs in it, see {@link Model}.
      */
     private const PAGES_PER_QUERY = Service::DEFAULT_MAX_PAGES;
 

@@ -56,7 +56,7 @@ final class ArchivingMode
                 return true;
             }
 
-            // also a run that ended with errors went through the websites
+            // a run that ends with errors records no finish, so the start of the latest run counts too
             $lastArchived = max((int) Option::get(CronArchive::OPTION_ARCHIVING_FINISHED_TS), (int) Option::get(CronArchive::OPTION_ARCHIVING_STARTED_TS)) ?: null;
         }
 
