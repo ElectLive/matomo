@@ -1010,6 +1010,32 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
         ], $this->getAvailableArchives());
     }
 
+    /**
+     * @dataProvider getNamesOfRangeInvalidations
+     */
+    public function testMarkArchivesAsInvalidatedOfASingleReportLeavesTheRangeArchives(?string $name, int $expectedValue)
+    {
+        $this->insertArchiveRow(1, '2020-03-02,2020-03-04', 'range', ArchiveWriter::DONE_OK, false, false);
+        $this->insertArchiveRow(1, '2020-03-02,2020-03-04', 'range', ArchiveWriter::DONE_OK, 'Actions', false);
+
+        $this->invalidator->markArchivesAsInvalidated([1], ['2020-03-03'], 'day', null, false, false, $name);
+
+        $range = ['idsite' => 1, 'date1' => '2020-03-02', 'date2' => '2020-03-04', 'period' => 5];
+        $this->assertEquals([
+            '2020_03' => [
+                $range + ['name' => 'done', 'value' => $expectedValue],
+                $range + ['name' => 'done.Actions', 'value' => $expectedValue],
+            ],
+        ], $this->getAvailableArchives());
+    }
+
+    public function getNamesOfRangeInvalidations(): iterable
+    {
+        yield 'all plugins' => [null, ArchiveWriter::DONE_INVALIDATED];
+        yield 'a plugin' => ['ExamplePlugin', ArchiveWriter::DONE_INVALIDATED];
+        yield 'a single report' => ['ExamplePlugin.someData', ArchiveWriter::DONE_OK];
+    }
+
     public function testMarkArchivesAsInvalidatedAddsInvalidationEntriesButDoesNotMarkArchivesAsInvalidatedIfArchiveIsPartial()
     {
         // insert some partial archives
