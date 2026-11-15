@@ -173,18 +173,15 @@ class Service
     }
 
     /**
-     * The idaction each page that isn't removed is tracked under now, resolved in one query; null for a URL that isn't
-     * tracked, or whose `log_action` row was deleted with the unused actions.
+     * The idaction each page is tracked under now, resolved in one query; null for a URL that isn't tracked, or whose
+     * `log_action` row was deleted with the unused actions.
      *
-     * @param list<int>|null $idPages only these pages, else all
+     * @param list<int>|null $idPages these pages, also removed ones, else all pages that aren't removed
      * @return array<int, int|null> idaction by idpage
      */
     public function getIdActionsByPage(int $idSite, ?array $idPages = null): array
     {
-        $pages = $this->dao->getPagesForSite($idSite);
-        if ($idPages !== null) {
-            $pages = array_values(array_filter($pages, fn(array $page): bool => in_array($page['idpage'], $idPages, true)));
-        }
+        $pages = $idPages === null ? $this->dao->getPagesForSite($idSite) : $this->dao->getPagesByIds($idSite, $idPages);
 
         $resolvedIdActions = $this->getIdActionsForUrls(array_column($pages, 'url'));
 

@@ -442,12 +442,9 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
     {
         $idPage = $this->selectPage(self::PAGE_URL);
         $otherIdPage = $this->selectPage(self::OTHER_PAGE_URL);
-        $service = StaticContainer::get(Service::class);
-        foreach ($service->getPages(1) as $page) {
-            if ($page['url'] === self::OTHER_PAGE_URL) {
-                $service->removePage(1, $page['idpage']);
-            }
-        }
+        StaticContainer::get(Service::class)->removePage(1, $otherIdPage);
+        // before the day
+        Db::query('UPDATE ' . Common::prefixTable('transitions_preprocessed_page') . " SET removed_date = '2010-03-05 23:59:59' WHERE idpage = ?", [$otherIdPage]);
 
         $this->archive('day', self::DAY);
 
@@ -476,6 +473,27 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
         StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::LATER_DAY)], 'week');
         $this->archive('week', self::LATER_DAY);
         self::assertSame([], $this->getStoredRecordNames(2, '2010-03-08', $this->getLatestIdArchive(2, '2010-03-08')));
+    }
+
+    public function testArchivingADayAgainKeepsTheRecordsOfAPageRemovedSince(): void
+    {
+        $idPage = $this->selectPage(self::PAGE_URL);
+        $month = $this->getStoredReport($idPage, 'month', self::DAY);
+        $day = $this->getStoredReport($idPage, 'day', self::DAY);
+        StaticContainer::get(Service::class)->removePage(1, $idPage);
+
+        // for example after late tracking or the deletion of another page's visits; the month is invalidated with it
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        $this->archive('month', self::DAY);
+
+        self::assertSame($this->getExpectedRecordNames($idPage), $this->getStoredRecordNames(1, self::DAY, $this->getLatestIdArchive(1, self::DAY)));
+        self::assertSame($day, $this->getStoredReport($idPage, 'day', self::DAY));
+
+        foreach (['day' => $day, 'month' => $month] as $period => $stored) {
+            $served = API::getInstance()->getTransitionsForAction(self::PAGE_URL, 'url', 1, $period, self::DAY);
+            self::assertSame(1, $served['preprocessed'], $period);
+            self::assertSame($stored['pageMetrics'], array_map('intval', $served['pageMetrics']), $period);
+        }
     }
 
     private function getLatestIdArchive(int $periodId, string $date1): int

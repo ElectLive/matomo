@@ -46,6 +46,25 @@ class Dao
     }
 
     /**
+     * @param list<int> $idPages
+     * @return list<PreprocessedPage> the website's pages among them, also removed ones, newest first
+     */
+    public function getPagesByIds(int $idSite, array $idPages): array
+    {
+        if (empty($idPages)) {
+            return [];
+        }
+
+        $rows = $this->readIfTableExists(fn() => Db::fetchAll(
+            'SELECT idpage, idsite, url, url_hash, created_date, created_by, removed_date FROM ' . $this->getTable()
+            . ' WHERE idsite = ? AND idpage IN (' . implode(',', array_map('intval', $idPages)) . ') ORDER BY created_date DESC, idpage DESC',
+            [$idSite]
+        ), []);
+
+        return array_map([$this, 'castRow'], $rows);
+    }
+
+    /**
      * @param list<int> $idSites
      * @return list<int> the websites among them with pages, also removed ones
      */

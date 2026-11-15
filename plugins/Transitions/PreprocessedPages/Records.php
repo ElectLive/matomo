@@ -18,7 +18,8 @@ use Piwik\DataTable\Row;
 
 /**
  * Names and layout of the archive records of a pre-processed page, `Transitions_<idpage>_<part>`. They are keyed by the
- * page's row, so they outlive the page URL's `log_action` row and a removal of the page.
+ * page's row, so they outlive the page URL's `log_action` row and a removal of the page: archiving a period again also
+ * builds the pages removed since it started.
  *
  * The list records hold one row per action, with the label and the count in `Metrics::INDEX_NB_ACTIONS`, plus a
  * summary row for the actions beyond {@link getMaxRows()}. The referrers record holds one row per referrer type (label =

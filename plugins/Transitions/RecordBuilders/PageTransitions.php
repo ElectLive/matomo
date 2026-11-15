@@ -401,8 +401,9 @@ class PageTransitions extends RecordBuilder
     }
 
     /**
-     * The selected pages of the website that aren't removed, once per archive. A longer period also sums the records of
-     * the pages removed since it started, so archiving it again doesn't drop the records of their days.
+     * The selected pages of the website that aren't removed, plus those removed since the period started, once per
+     * archive: archiving a period again, a day too, keeps the records of the removed pages' days. A day whose logs were
+     * deleted is archived without any records by core anyway.
      *
      * @return list<int>
      */
@@ -413,12 +414,10 @@ class PageTransitions extends RecordBuilder
             $service = StaticContainer::get(Service::class);
             $params = $archiveProcessor->getParams();
 
-            $idPages = $service->getPageIds($idSite);
-            if ($params->getPeriod()->getLabel() !== 'day') {
-                $idPages = array_values(array_unique(array_merge($idPages, $service->getPageIdsRemovedSince($idSite, $params->getDateTimeStart()))));
-            }
-
-            $this->idPagesByArchive[$archiveProcessor] = $idPages;
+            $this->idPagesByArchive[$archiveProcessor] = array_values(array_unique(array_merge(
+                $service->getPageIds($idSite),
+                $service->getPageIdsRemovedSince($idSite, $params->getDateTimeStart())
+            )));
         }
 
         return $this->idPagesByArchive[$archiveProcessor];
