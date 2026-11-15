@@ -700,6 +700,30 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, '2010-03-20', ''));
     }
 
+    /**
+     * Invalidating only the Transitions reports of a day leaves its archive for all plugins as it is, so the records
+     * of a longer period are summed from the day's partial archive marked invalidated: they aren't served either.
+     */
+    public function testALongerPeriodSummedFromAPartialArchiveMarkedInvalidatedIsNotServed(): void
+    {
+        $this->archiveAllPlugins(self::DAY);
+        $idPage = $this->selectPage(self::PAGE_URL);
+        self::assertSame(1, $this->request('day', self::DAY)['preprocessed']);
+
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day', null, false, false, 'Transitions');
+        self::assertSame(1, $this->countPartialArchives(self::DAY, Day::PERIOD_ID, true));
+
+        // with cron archiving, so the request doesn't build the day again
+        $this->setBrowserArchiving(false);
+        $this->archive($idPage, 'week', self::DAY);
+
+        self::assertArrayNotHasKey('preprocessed', $this->request('week', self::DAY));
+        self::assertSame(1, (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' WHERE idsite = 1 AND period = ? AND name = ?',
+            [Week::PERIOD_ID, Records::INVALIDATED]
+        ));
+    }
+
     public function testADayBuildDuringAnInvalidationOfTheDayIsNotKept(): void
     {
         $raw = $this->request('day', self::DAY);

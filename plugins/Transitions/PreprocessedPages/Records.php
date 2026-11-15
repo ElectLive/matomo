@@ -74,6 +74,7 @@ final class Records
     /**
      * Set in a partial archive whose period core invalidated after it was built. Its records are not served, like
      * those of an invalidated archive, and it is deleted like any partial archive once its period is archived again.
+     * Also set in the archive of a longer period summed from a subperiod's records read from such an archive.
      */
     public const INVALIDATED = 'Transitions_invalidated';
 

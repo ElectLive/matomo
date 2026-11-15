@@ -170,9 +170,22 @@ class PageTransitions extends RecordBuilder
             $archiveProcessor->aggregateNumericMetrics($numericRecordNames);
         }
 
-        $daysWithVisits = $this->sumDaysWithVisits($archiveProcessor);
+        $params = $archiveProcessor->getParams();
+        $subperiods = array_values($params->getPeriod()->getSubperiods());
+        $archive = Archive::factory($params->getSegment(), $subperiods, [$this->getIdSite($archiveProcessor)], false, true);
+        if (!$archive instanceof Archive) {
+            return;
+        }
+        $archive->forceFetchingWithoutLaunchingArchiving();
+
+        $daysWithVisits = $this->sumDaysWithVisits($archive, $subperiods);
         if ($daysWithVisits !== null) {
             $archiveProcessor->insertNumericRecord(Records::DAYS_WITH_VISITS, $daysWithVisits);
+        }
+
+        // the records summed from a subperiod's partial archive marked invalidated aren't served either
+        if ($this->isAnyMarkedInvalidated($archive)) {
+            $archiveProcessor->insertNumericRecord(Records::INVALIDATED, 1);
         }
     }
 
@@ -180,18 +193,11 @@ class PageTransitions extends RecordBuilder
      * Sums the days with visits of the subperiods, as their page `days` counters are summed. A subperiod with visits
      * archived before any page was selected has no count, so the period gets none and is never served as covered.
      * A subperiod without an archive, or without visits, counts no days.
+     *
+     * @param list<\Piwik\Period> $subperiods
      */
-    private function sumDaysWithVisits(ArchiveProcessor $archiveProcessor): ?int
+    private function sumDaysWithVisits(Archive $archive, array $subperiods): ?int
     {
-        $params = $archiveProcessor->getParams();
-        $subperiods = array_values($params->getPeriod()->getSubperiods());
-
-        $archive = Archive::factory($params->getSegment(), $subperiods, [$this->getIdSite($archiveProcessor)], false, true);
-        if (!$archive instanceof Archive) {
-            return null;
-        }
-        $archive->forceFetchingWithoutLaunchingArchiving();
-
         // read apart, as a value missing next to another is returned as 0
         $counts = $archive->getNumeric([Records::DAYS_WITH_VISITS]);
         $visits = $archive->getNumeric(['nb_visits']);
@@ -209,6 +215,23 @@ class PageTransitions extends RecordBuilder
         }
 
         return $daysWithVisits;
+    }
+
+    /**
+     * Tells whether the records of a subperiod are read from an archive marked {@link Records::INVALIDATED}.
+     */
+    private function isAnyMarkedInvalidated(Archive $archive): bool
+    {
+        // read alone, as a value missing next to another is returned as 0
+        $markers = $archive->getNumeric([Records::INVALIDATED]);
+        foreach (is_array($markers) ? $markers : [] as $marker) {
+            $value = $this->toArray($marker)[Records::INVALIDATED] ?? 0;
+            if (is_numeric($value) && $value > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
