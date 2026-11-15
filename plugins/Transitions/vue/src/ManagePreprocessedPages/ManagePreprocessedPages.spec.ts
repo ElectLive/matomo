@@ -115,6 +115,10 @@ describe('Transitions/ManagePreprocessedPages', () => {
     state.post.mockReset();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   describe('list', () => {
     it('should list the pages with the usage of the limit', async () => {
       answer(() => [
@@ -385,6 +389,8 @@ describe('Transitions/ManagePreprocessedPages', () => {
     }
 
     it('should read the most viewed pages of last month once, when the field is first used', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-06-15T10:00:00Z'));
       answer(() => [], POOL);
       const wrapper = await mountPage();
       expect(poolRequests()).toHaveLength(0);
@@ -399,13 +405,29 @@ describe('Transitions/ManagePreprocessedPages', () => {
       expect(poolRequests()[0][0]).toMatchObject({
         idSite: 1,
         period: 'month',
-        date: 'lastMonth',
+        date: '2026-05-01',
         flat: 1,
         filter_sort_column: 'nb_hits',
         filter_sort_order: 'desc',
         filter_limit: 500,
       });
       expect(poolRequests()[0][0]).not.toHaveProperty('filter_pattern');
+    });
+
+    it.each([
+      ['on the last day of a month longer than the previous one', '2026-03-31T18:00:00Z', '2026-02-01'],
+      ['across the year', '2027-01-15T10:00:00Z', '2026-12-01'],
+      ['while the month just started in UTC has not yet for every website', '2026-04-01T06:00:00Z', '2026-02-01'],
+      ['once the month has started for every website', '2026-04-01T12:00:00Z', '2026-03-01'],
+    ])('should read the previous calendar month %s', async (_, now, date) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(now));
+      answer(() => [], POOL);
+      const wrapper = await mountPage();
+
+      await wrapper.find('.managePreprocessedPages__field').trigger('focusin');
+
+      expect(poolRequests()[0][0]).toMatchObject({ period: 'month', date });
     });
 
     it.each([
@@ -621,6 +643,22 @@ describe('Transitions/ManagePreprocessedPages', () => {
       expect(wrapper.findAll('.managePreprocessedPages__row')).toHaveLength(1);
       expect(wrapper.find('.managePreprocessedPages__usageLabel').text())
         .toBe('Transitions_PreprocessedPagesUsage:1|20');
+    });
+
+    it('should name each remove button and the confirmation by the page', async () => {
+      answer(() => [page(2), page(1)]);
+      const wrapper = await mountPage();
+
+      const button = wrapper.findAll('.managePreprocessedPages__remove')[1];
+      const names = button.attributes('aria-labelledby')!.split(' ')
+        .map((id) => wrapper.find(`[id="${id}"]`).text());
+      expect(names).toEqual(['General_Remove', 'https://example.org/page-1']);
+
+      await button.trigger('click');
+      const group = wrapper.find('.managePreprocessedPages__confirm');
+      expect(group.attributes('role')).toBe('group');
+      expect(wrapper.find(`[id="${group.attributes('aria-labelledby')}"]`).text())
+        .toBe('Transitions_StopPreprocessingConfirm:example.org/page-1');
     });
 
     it('should move the focus back to the remove button, or to the one now in its place', async () => {

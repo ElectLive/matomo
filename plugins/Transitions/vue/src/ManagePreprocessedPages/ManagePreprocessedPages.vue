@@ -79,9 +79,13 @@
             v-if="confirmingId === page.idpage"
             colspan="4"
           >
-            <div class="managePreprocessedPages__confirm">
+            <div
+              class="managePreprocessedPages__confirm"
+              role="group"
+              :aria-labelledby="`${idPrefix}Confirm${page.idpage}`"
+            >
               <div class="managePreprocessedPages__confirmText">
-                <strong>{{ confirmLabel(page.url) }}</strong>
+                <strong :id="`${idPrefix}Confirm${page.idpage}`">{{ confirmLabel(page.url) }}</strong>
                 {{ translate('Transitions_StopPreprocessingHelp') }}
               </div>
               <div class="managePreprocessedPages__confirmActions">
@@ -101,7 +105,10 @@
             </div>
           </td>
           <template v-else>
-            <td class="managePreprocessedPages__url">{{ displayUrl(page.url) }}</td>
+            <td
+              :id="`${idPrefix}Url${page.idpage}`"
+              class="managePreprocessedPages__url"
+            >{{ displayUrl(page.url) }}</td>
             <td class="managePreprocessedPages__date">{{ formatDate(page.created_date) }}</td>
             <td class="managePreprocessedPages__addedBy">
               <template v-if="page.created_by === null && page.created_by_superuser">
@@ -118,8 +125,10 @@
             </td>
             <td class="managePreprocessedPages__actionColumn">
               <button
+                :id="`${idPrefix}Remove${page.idpage}`"
                 type="button"
                 class="managePreprocessedPages__remove"
+                :aria-labelledby="`${idPrefix}Remove${page.idpage} ${idPrefix}Url${page.idpage}`"
                 :disabled="removingId !== null"
                 @click="confirmRemove(page)"
               >{{ translate('General_Remove') }}</button>
@@ -224,6 +233,7 @@ import {
   formatUtcDateTime,
   matchKey,
   pageKey,
+  previousMonthStart,
   stopConfirmLabel,
 } from '../preprocessedPageUrls';
 
@@ -317,6 +327,7 @@ export default defineComponent({
     instanceCount += 1;
     return {
       unknownUserHelpId: `managePreprocessedPagesUnknownUser${instanceCount}`,
+      idPrefix: `managePreprocessedPages${instanceCount}`,
       // the newest list request wins, so a slower earlier reload can't bring back a stale list
       listLoads: { latest: 0 },
     };
@@ -451,9 +462,9 @@ export default defineComponent({
       }
     },
     /**
-     * The most viewed pages of last month: a finished month, which archiving has already processed
-     * and keeps. The pool is sorted by pageviews, so the first matches are the most viewed ones.
-     * Nothing is read until a page could be added.
+     * The most viewed pages of the previous calendar month: a finished month, which archiving has
+     * already processed and keeps. The pool is sorted by pageviews, so the first matches are the
+     * most viewed ones. Nothing is read until a page could be added.
      */
     loadSuggestions() {
       if (this.isSuggestionPoolRequested || !this.hasLoaded || this.isLimitReached) {
@@ -466,7 +477,7 @@ export default defineComponent({
           method: 'Actions.getPageUrls',
           idSite: Matomo.idSite,
           period: 'month',
-          date: 'lastMonth',
+          date: previousMonthStart(new Date()),
           segment: '',
           flat: 1,
           filter_sort_column: 'nb_hits',

@@ -14,10 +14,7 @@
       <span
         v-if="showBadge"
         class="transitionsSourceHeader__badge"
-        :class="{
-          'transitionsSourceHeader__badge--preprocessed': source.preprocessed,
-          'transitionsSourceHeader__badge--raw': !source.preprocessed,
-        }"
+        :class="{ 'transitionsSourceHeader__badge--preprocessed': source.preprocessed }"
         :title="badgeTooltip || undefined"
         :tabindex="badgeTooltip ? 0 : undefined"
         :aria-describedby="badgeTooltip ? badgeHelpId : undefined"
@@ -396,11 +393,17 @@ export default defineComponent({
         };
         this.updateSiteHasPages(this.status.used);
         this.message = this.addedMessage;
+        // the toggle is replaced by the stop button, which takes the focus
+        this.isSaving = false;
+        this.focusToggle();
       }).catch((error) => {
         // eg the limit was reached, or the page added, by another admin meanwhile
         if (this.isCurrent(load)) {
           this.error = apiErrorText(error);
-          return this.fetchStatus(load);
+          return this.fetchStatus(load).then(() => {
+            this.isSaving = false;
+            this.focusToggle();
+          });
         }
 
         return undefined;

@@ -461,6 +461,23 @@ describe('Transitions/TransitionsSourceHeader', () => {
       wrapper.unmount();
     });
 
+    it.each([
+      ['adding', () => state.post.mockResolvedValue({ idpage: 7 }), 'Transitions_StopPreprocessing'],
+      ['a failed add', () => state.post.mockRejectedValue(new Error('failed')), 'Transitions_PreprocessThisPage'],
+    ])('should keep the focus on the toggle after %s', async (_, answerPost, toggleText) => {
+      answerPost();
+      const wrapper = await mountHeader({}, document.body);
+
+      (wrapper.find('.transitionsSourceHeader__toggle').element as HTMLElement).focus();
+      await wrapper.find('.transitionsSourceHeader__toggle').trigger('click');
+      await flushPromises();
+
+      expect(document.activeElement?.className).toContain('transitionsSourceHeader__toggle');
+      expect(document.activeElement?.textContent).toContain(toggleText);
+
+      wrapper.unmount();
+    });
+
     it('should ask for confirmation before it stops pre-processing', async () => {
       state.fetch.mockResolvedValue(status({ selected: true, idPage: 3 }));
       state.post.mockResolvedValue({});
