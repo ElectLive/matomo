@@ -47,8 +47,7 @@ class Model
      * Returns the archives IDs that have already been invalidated and have been since re-processed.
      *
      * These archives { archive name (includes segment hash) , idsite, date, period } will be deleted.
-     * Partial archives of a plugin that a newer usable archive for all plugins replaces are returned too, once that
-     * archive for all plugins has been archived again.
+     * Partial archives of a plugin that a newer usable archive for all plugins replaces are returned too.
      *
      * @param string $archiveTable
      * @param bool $setGroupContentMaxLen for tests only
@@ -65,20 +64,22 @@ class Model
             }
         }
 
+        // also the site/periods with a partial archive, whose newer archive for all plugins may be the only one
         $sql = "SELECT idsite, date1, date2, period, name,
-                       GROUP_CONCAT(idarchive, '.', value ORDER BY ts_archived DESC, idarchive DESC) as archives
+                       GROUP_CONCAT(idarchive, '.', value ORDER BY ts_archived DESC, idarchive DESC) as archives,
+                       MAX(`value` = " . ArchiveWriter::DONE_PARTIAL . ") as has_partial
                   FROM `$archiveTable`
                  WHERE name LIKE 'done%'
                    AND `value` NOT IN (" . ArchiveWriter::DONE_ERROR . ", " . ArchiveWriter::DONE_ERROR_INVALIDATED . ")
-              GROUP BY idsite, date1, date2, period, name HAVING count(*) > 1";
+              GROUP BY idsite, date1, date2, period, name HAVING count(*) > 1 OR has_partial = 1";
 
         $archiveIds = array();
-        $reArchivedAllPluginsArchives = [];
+        $sitePeriodsWithPartialArchives = [];
 
         $rows = Db::fetchAll($sql);
         foreach ($rows as $row) {
-            if (!str_contains($row['name'], '.')) {
-                $reArchivedAllPluginsArchives[] = [$row['idsite'], $row['date1'], $row['date2'], $row['period']];
+            if ($row['has_partial']) {
+                $sitePeriodsWithPartialArchives[] = [$row['idsite'], $row['date1'], $row['date2'], $row['period']];
             }
 
             $duplicateArchives = explode(',', $row['archives']);
@@ -114,8 +115,8 @@ class Model
             }
         }
 
-        // partials of the periods archived again, also those finished after a finalize deleted the older ones
-        $partialArchiveIds = $this->getPartialArchiveIdsOlderThanUsableFullArchive($archiveTable, $reArchivedAllPluginsArchives);
+        // also those finished after the finalize of the newer archive for all plugins deleted the older ones
+        $partialArchiveIds = $this->getPartialArchiveIdsOlderThanUsableFullArchive($archiveTable, $sitePeriodsWithPartialArchives);
 
         return array_values(array_unique(array_merge($archiveIds, $partialArchiveIds)));
     }
@@ -124,8 +125,8 @@ class Model
      * Partial archives of a plugin (done<hash>.<Plugin>) are read only until a newer usable archive for all plugins
      * (done<hash>) exists for the same site, period and segment, see ArchiveSelector. Older ones are never read again.
      *
-     * Only the given site and period combinations are looked at, those whose archive for all plugins was archived again,
-     * so the archive table isn't scanned a second time.
+     * Only the given site and period combinations are looked at, those with a partial archive, so the archive table
+     * isn't scanned a second time.
      *
      * @param array<array{0: int|string, 1: string, 2: string, 3: int|string}> $sitePeriods idsite, date1, date2, period
      * @return string[]
