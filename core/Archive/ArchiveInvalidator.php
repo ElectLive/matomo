@@ -324,6 +324,28 @@ class ArchiveInvalidator
 
         $this->markArchivesInvalidated($idSites, $allPeriodsToInvalidate, $segment, $period != 'range', $forceInvalidateNonexistentRanges, $name, $doNotCreateInvalidations);
 
+        $invalidatedPeriods = [];
+        foreach ($allPeriodsToInvalidate as $periodsOfYearMonth) {
+            foreach ($periodsOfYearMonth as $invalidatedPeriod) {
+                $invalidatedPeriods[] = $invalidatedPeriod;
+            }
+        }
+
+        /**
+         * Triggered after archives were marked as invalidated, with the periods that were invalidated: those of the
+         * requested dates whose logs weren't deleted, their parent periods and, when cascading down, their child
+         * periods.
+         *
+         * Plugins that store data outside the invalidated archives, for example in partial archives, which are not
+         * invalidated, can use it to discard the data of these periods.
+         *
+         * @param int[] $idSites The IDs of the sites whose archives were invalidated.
+         * @param Period[] $periods The invalidated periods.
+         * @param null|Segment $segment The invalidated segment, or null for all segments.
+         * @param null|string $name The invalidated plugin or `Plugin.report`, or null for all plugins.
+         */
+        Piwik::postEvent('Archiving.markArchivesAsInvalidated.end', [$idSites, $invalidatedPeriods, $segment, $name]);
+
         $isInvalidatingDays = $period == 'day' || $cascadeDown || empty($period);
         $isNotInvalidatingSegment = empty($segment) || empty($segment->getString());
 
