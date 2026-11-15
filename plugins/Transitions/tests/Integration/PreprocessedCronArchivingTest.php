@@ -319,6 +319,96 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
         self::assertSame([], array_diff(array_slice($processed, $firstPageArchive), ['page']));
     }
 
+    /**
+     * R-A1, R-A3: runs stopped by --max-archives-to-process, which continue the shared list of websites, archive every
+     * other invalidation before any single report, and the following runs archive the single reports of every website:
+     * the added page's and another plugin's, re-archived as core updates do.
+     */
+    public function testRunsStoppedByTheirLimitArchiveTheSingleReportsOfEveryWebsiteAfterTheOtherArchives(): void
+    {
+        $lateDay = self::getFirstDay();
+        $visits = [];
+        foreach ([1, 2] as $idSite) {
+            $visits[$idSite] = $this->getStoredNumeric($idSite, 'done', 'nb_visits', 'day', $lateDay);
+            self::trackVisit($idSite, $lateDay->toString('Y-m-d 20:00:00'), self::PAGE_URL, '', 100);
+        }
+        $idPage = API::getInstance()->addPreprocessedPage(1, self::NEW_PAGE_URL)['idpage'];
+        StaticContainer::get(ArchiveInvalidator::class)->scheduleReArchiving([1, 2], 'Actions', 'Actions_hits', $lateDay);
+
+        // core:archive applies a remembered date only once the day's archive is older than its time to live
+        Date::$now = self::$now + 3600;
+        $processed = [];
+        $runs = 0;
+        do {
+            $output = self::runCoreArchive(3);
+            $processedByRun = [];
+            foreach (explode(PHP_EOL, $output) as $line) {
+                if (preg_match('/^Processing invalidation: .*idsite = (\d+), period = (\w+)\(([\d-]+) .*name = (done[^,]*),/', $line, $matches)) {
+                    $processedByRun[] = (str_contains($matches[4], '.') ? 'report ' : '') . "{$matches[1]} {$matches[2]} {$matches[3]}";
+                }
+            }
+
+            // within each run, the single reports follow every other archive
+            $firstReport = array_key_first(array_filter($processedByRun, fn($description) => str_starts_with($description, 'report ')));
+            if ($firstReport !== null) {
+                self::assertSame([], array_filter(array_slice($processedByRun, $firstReport), fn($description) => !str_starts_with($description, 'report ')), "run $runs");
+            }
+            $processed = array_merge($processed, $processedByRun);
+            $runs++;
+        } while ($runs < 40 && Db::fetchOne('SELECT COUNT(*) FROM ' . Common::prefixTable('archive_invalidations') . " WHERE report IS NOT NULL AND report <> ''") > 0);
+
+        // more than one run per list of websites, and every single report was archived
+        self::assertGreaterThan(2, $runs);
+        self::assertSame(0, (int) Db::fetchOne('SELECT COUNT(*) FROM ' . Common::prefixTable('archive_invalidations') . " WHERE report IS NOT NULL AND report <> ''"));
+
+        // the late visit was archived for all plugins on both websites before any single report
+        $firstReport = array_key_first(array_filter($processed, fn($description) => str_starts_with($description, 'report ')));
+        foreach ([1, 2] as $idSite) {
+            self::assertSame($visits[$idSite] + 1, $this->getStoredNumeric($idSite, 'done', 'nb_visits', 'day', $lateDay), "site $idSite");
+            self::assertLessThan($firstReport, array_search("$idSite day {$lateDay->toString()}", $processed, true), "site $idSite");
+            self::assertContains("report $idSite day {$lateDay->toString()}", $processed);
+            self::assertNotNull($this->getStoredNumeric($idSite, 'done.Actions', 'Actions_hits', 'day', $lateDay), "site $idSite");
+        }
+        self::assertGreaterThan(0, $this->getStoredNumeric(1, 'done.Transitions', Records::getRecordName($idPage, Records::PAGEVIEWS), 'day', $lateDay));
+        self::assertGreaterThan(0, $this->getStoredNumeric(1, 'done.Transitions', Records::getRecordName($idPage, Records::PAGEVIEWS), 'month', $lateDay));
+    }
+
+    /**
+     * R-A1, R-A3: a run stopped by a signal, maintenance mode or a kill once it archived the other invalidations of the
+     * first website leaves its single reports to the run that continues the shared list of websites.
+     */
+    public function testARunStoppedAfterAWebsiteLeavesItsSingleReportsToTheRunThatContinuesTheList(): void
+    {
+        if (!extension_loaded('pcntl')) {
+            self::markTestSkipped('pcntl is required');
+        }
+
+        $idPage = API::getInstance()->addPreprocessedPage(1, self::NEW_PAGE_URL)['idpage'];
+        StaticContainer::get(ArchiveInvalidator::class)->scheduleReArchiving([1, 2], 'Actions', 'Actions_hits', self::getFirstDay());
+
+        $archiver = null;
+        Piwik::addAction('CronArchive.archiveSingleSite.finish', function ($idSite) use (&$archiver) {
+            if ($archiver instanceof CronArchive && (int) $idSite === 1) {
+                $archiver->handleSignal(\SIGINT);
+            }
+        });
+        $output = self::runCoreArchive(null, function (CronArchive $cronArchive) use (&$archiver) {
+            $archiver = $cronArchive;
+        });
+        $archiver = null;
+        self::assertStringContainsString('signal to abort received', $output);
+        self::assertStringNotContainsString('Start processing single report archives', $output);
+        $singleReportsOfSites = 'SELECT DISTINCT idsite FROM ' . Common::prefixTable('archive_invalidations') . " WHERE report IS NOT NULL AND report <> '' ORDER BY idsite";
+        self::assertEquals([['idsite' => 1], ['idsite' => 2]], Db::fetchAll($singleReportsOfSites));
+
+        $output = self::runCoreArchive();
+        self::assertStringContainsString('Continuing ongoing archiving run', $output);
+        self::assertStringNotContainsString('Start processing archives for site 1.', $output);
+        self::assertStringContainsString('Start processing single report archives for site 1.', $output);
+        self::assertSame([], Db::fetchAll($singleReportsOfSites));
+        self::assertGreaterThan(0, $this->getStoredNumeric(1, 'done.Transitions', Records::getRecordName($idPage, Records::PAGEVIEWS), 'month'));
+    }
+
     private static function getFirstDay(): Date
     {
         return Date::today()->subMonth(2)->setDay(5);
@@ -383,11 +473,15 @@ class PreprocessedCronArchivingTest extends IntegrationTestCase
         }
     }
 
-    private static function runCoreArchive(): string
+    private static function runCoreArchive(?int $maxArchivesToProcess = null, ?callable $onStart = null): string
     {
         $logger = new FakeLogger();
         StaticContainer::getContainer()->set(LoggerInterface::class, $logger);
         $archiver = new CronArchive($logger);
+        $archiver->maxArchivesToProcess = $maxArchivesToProcess;
+        if ($onStart !== null) {
+            $onStart($archiver);
+        }
         $archiver->main();
         self::assertStringNotContainsString('ERROR', $logger->output);
 
