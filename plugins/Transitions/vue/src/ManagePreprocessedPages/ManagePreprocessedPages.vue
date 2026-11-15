@@ -34,16 +34,21 @@
       </div>
     </div>
 
-    <p
+    <Alert
       v-if="hasLoaded && limitMessage"
       class="managePreprocessedPages__limitMessage"
-    >{{ limitMessage }}</p>
+      :severity="pages.length > maxPages ? 'warning' : 'info'"
+    >{{ limitMessage }}</Alert>
 
-    <p
+    <Alert
       v-if="listError"
-      class="managePreprocessedPages__error"
-      role="alert"
-    >{{ listError }}</p>
+      severity="danger"
+    >
+      <div
+        class="managePreprocessedPages__error"
+        role="alert"
+      >{{ listError }}</div>
+    </Alert>
 
     <ActivityIndicator :loading="isLoading" />
 
@@ -109,8 +114,14 @@
               :id="`${idPrefix}Url${page.idpage}`"
               class="managePreprocessedPages__url"
             >{{ displayUrl(page.url) }}</td>
-            <td class="managePreprocessedPages__date">{{ formatDate(page.created_date) }}</td>
-            <td class="managePreprocessedPages__addedBy">
+            <td
+              class="managePreprocessedPages__date"
+              :data-label="translate('Transitions_ColumnDateAdded')"
+            >{{ formatDate(page.created_date) }}</td>
+            <td
+              class="managePreprocessedPages__addedBy"
+              :data-label="translate('Transitions_ColumnAddedBy')"
+            >
               <template v-if="page.created_by === null && page.created_by_superuser">
                 {{ translate('Transitions_AddedBySuperUser') }}
               </template>
@@ -158,11 +169,14 @@
           :title="translate('Transitions_AddPageUrl')"
           :full-width="true"
           :model-value="pageUrl"
+          :ui-control-attributes="inputAttributes"
           @update:model-value="onPageUrlInput"
         />
         <div
           v-if="suggestions.length"
           class="managePreprocessedPages__suggestions"
+          role="group"
+          :aria-label="translate('Transitions_PreprocessedPagesSuggestions')"
         >
           <div class="managePreprocessedPages__suggestionsHeader">
             <span>{{ translate('Transitions_PreprocessedPagesSuggestions') }}</span>
@@ -199,19 +213,27 @@
       >{{ translate('Transitions_AddPage') }}</button>
     </form>
 
-    <div
+    <Alert
       v-if="addError"
       class="managePreprocessedPages__addError"
-      role="alert"
+      severity="danger"
     >
-      <p class="managePreprocessedPages__error">{{ addError }}</p>
-      <p
-        v-if="isDuplicateError"
-        class="managePreprocessedPages__duplicateHelp"
-      >{{ translate('Transitions_PreprocessedPageDuplicateHelp') }}</p>
-    </div>
+      <div
+        :id="`${idPrefix}AddError`"
+        role="alert"
+      >
+        <div class="managePreprocessedPages__error">{{ addError }}</div>
+        <div
+          v-if="isDuplicateError"
+          class="managePreprocessedPages__duplicateHelp"
+        >{{ translate('Transitions_PreprocessedPageDuplicateHelp') }}</div>
+      </div>
+    </Alert>
 
-    <p class="managePreprocessedPages__hint">{{ rebuildHint }}</p>
+    <div
+      :id="`${idPrefix}Hint`"
+      class="managePreprocessedPages__hint"
+    >{{ rebuildHint }}</div>
   </ContentBlock>
 </template>
 
@@ -220,6 +242,7 @@ import { defineComponent } from 'vue';
 import {
   ActivityIndicator,
   AjaxHelper,
+  Alert,
   ContentBlock,
   ContentTable,
   Matomo,
@@ -300,6 +323,7 @@ export default defineComponent({
   },
   components: {
     ActivityIndicator,
+    Alert,
     ContentBlock,
     Field,
   },
@@ -397,6 +421,20 @@ export default defineComponent({
     },
     isAddDisabled(): boolean {
       return !this.hasLoaded || this.isAdding || this.isLimitReached || !this.pageUrl.trim();
+    },
+    /** The hint, and an error of the last add, describe the field. */
+    inputAttributes(): Record<string, string> {
+      const describedBy = [`${this.idPrefix}Hint`];
+
+      if (this.addError) {
+        describedBy.unshift(`${this.idPrefix}AddError`);
+      }
+
+      return {
+        autocomplete: 'off',
+        'aria-describedby': describedBy.join(' '),
+        'aria-invalid': this.addError ? 'true' : 'false',
+      };
     },
     rebuildHint(): string {
       if (this.rearchiveMonths <= 0) {

@@ -22,6 +22,10 @@ vi.mock('CoreHome', async () => {
       post: (...args: unknown[]) => state.post(...args),
     },
     ContentBlock: { template: '<div class="contentBlock"><slot /></div>', props: ['contentTitle'] },
+    Alert: {
+      template: '<div class="alert" :class="\'alert-\' + severity"><slot /></div>',
+      props: ['severity'],
+    },
     ContentTable: {},
     Matomo: {
       idSite: 1,
@@ -47,7 +51,7 @@ vi.mock('CorePluginsAdmin', () => ({
     name: 'Field',
     template: '<input class="fieldInput" :value="modelValue" '
       + '@input="$emit(\'update:modelValue\', $event.target.value)" />',
-    props: ['uicontrol', 'name', 'modelValue', 'title', 'fullWidth'],
+    props: ['uicontrol', 'name', 'modelValue', 'title', 'fullWidth', 'uiControlAttributes'],
     emits: ['update:modelValue'],
   },
 }));
@@ -275,6 +279,7 @@ describe('Transitions/ManagePreprocessedPages', () => {
       expect(wrapper.find('.managePreprocessedPages__meterFill').attributes('style')).toContain('width: 100%');
       expect(wrapper.find('.managePreprocessedPages__limitMessage').text())
         .toBe('Transitions_PreprocessedPagesLimitReached:20');
+      expect(wrapper.find('.managePreprocessedPages__limitMessage').classes()).toContain('alert-info');
       expect(wrapper.find('.managePreprocessedPages__add').attributes('disabled')).toBeDefined();
 
       await wrapper.find('form').trigger('submit');
@@ -288,6 +293,7 @@ describe('Transitions/ManagePreprocessedPages', () => {
 
       expect(wrapper.find('.managePreprocessedPages__limitMessage').text())
         .toBe('Transitions_PreprocessedPagesOverLimit:25|20|6');
+      expect(wrapper.find('.managePreprocessedPages__limitMessage').classes()).toContain('alert-warning');
       expect(wrapper.find('.managePreprocessedPages__add').attributes('disabled')).toBeDefined();
 
       // a progress bar can't go past its maximum
@@ -337,7 +343,22 @@ describe('Transitions/ManagePreprocessedPages', () => {
         .toBe('Transitions_PreprocessedPageAlreadySelected');
       expect(wrapper.find('.managePreprocessedPages__duplicateHelp').text())
         .toBe('Transitions_PreprocessedPageDuplicateHelp');
+      expect(wrapper.find('.managePreprocessedPages__addError').classes()).toContain('alert-danger');
       expect(listRequests()).toHaveLength(2);
+
+      // the field is marked invalid and described by the error, then the hint
+      const field = wrapper.findComponent({ name: 'Field' });
+      const errorId = wrapper.find('.managePreprocessedPages__addError [role="alert"]').attributes('id');
+      const hintId = wrapper.find('.managePreprocessedPages__hint').attributes('id');
+      expect(field.props('uiControlAttributes')).toEqual({
+        autocomplete: 'off',
+        'aria-describedby': `${errorId} ${hintId}`,
+        'aria-invalid': 'true',
+      });
+
+      await typeUrl(wrapper, 'https://example.org/other');
+      expect(field.props('uiControlAttributes')['aria-describedby']).toBe(hintId);
+      expect(field.props('uiControlAttributes')['aria-invalid']).toBe('false');
       expect(wrapper.findAll('.managePreprocessedPages__row')).toHaveLength(1);
     });
 

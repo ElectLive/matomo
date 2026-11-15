@@ -26,13 +26,7 @@
   }
 
   .managePreprocessedPages__limitMessage {
-    color: @theme-color-text;
-    font-weight: bold;
-  }
-
-  .managePreprocessedPages__error {
-    margin: 0;
-    color: @theme-color-danger;
+    max-width: 75ch;
   }
 
   .managePreprocessedPages__url {
@@ -47,9 +41,64 @@
     white-space: nowrap;
   }
 
+  // on a phone each page is a block: the URL and its remove button, then when and by whom
   @media (max-width: 600px) {
-    .managePreprocessedPages__date {
+    .managePreprocessedPages__table,
+    .managePreprocessedPages__table tbody,
+    .managePreprocessedPages__table tr,
+    .managePreprocessedPages__table td {
+      display: block;
+      width: auto;
+    }
+
+    .managePreprocessedPages__table thead {
+      display: none;
+    }
+
+    .managePreprocessedPages__table .managePreprocessedPages__row:not(.managePreprocessedPages__row--confirming) {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid @theme-color-background-tinyContrast;
+    }
+
+    .managePreprocessedPages__row:not(.managePreprocessedPages__row--confirming) td {
+      padding: 0 20px;
+      // the row carries the separator; the content table's cell border is !important
+      border-bottom: 0 !important;
+    }
+
+    .managePreprocessedPages__row:not(.managePreprocessedPages__row--confirming) .managePreprocessedPages__actionColumn {
+      padding-left: 0;
+    }
+
+    .managePreprocessedPages__url {
+      grid-row: 1;
+      grid-column: 1;
+    }
+
+    .managePreprocessedPages__actionColumn {
+      grid-row: 1;
+      grid-column: 2;
+    }
+
+    .managePreprocessedPages__date,
+    .managePreprocessedPages__addedBy {
+      grid-column: ~"1 / -1";
+      color: @theme-color-text-light;
+      font-size: 12px;
       white-space: normal;
+    }
+
+    .managePreprocessedPages__date::before,
+    .managePreprocessedPages__addedBy::before {
+      content: attr(data-label) ": ";
+    }
+
+    // the add button wraps under the field
+    .managePreprocessedPages__hint {
+      margin-top: 12px;
     }
   }
 
@@ -115,17 +164,24 @@
     display: flex;
     flex-wrap: wrap;
     align-items: safe center;
-    gap: 8px 16px;
-    margin-top: 24px;
+    gap: 0 16px;
+    margin-top: 8px;
   }
 
   .managePreprocessedPages__field {
+    position: relative;
     flex: auto;
     min-width: 0;
     max-width: 720px;
   }
 
+  // a dropdown under the input, over what follows, as the field and button stay in place
   .managePreprocessedPages__suggestions {
+    position: absolute;
+    z-index: 10;
+    top: calc(100% - 43px);
+    right: 0.75rem;
+    left: 0.75rem;
     overflow: hidden;
     border: 1px solid @theme-color-border;
     border-radius: 6px;
@@ -186,16 +242,15 @@
   }
 
   .managePreprocessedPages__addError {
-    margin-top: 8px;
+    max-width: 75ch;
+    margin: 0 0 16px;
   }
 
   .managePreprocessedPages__duplicateHelp {
-    margin: 4px 0 0;
-    color: @theme-color-text-light;
+    margin-top: 4px;
   }
 
   .managePreprocessedPages__hint {
-    margin-top: 16px;
     color: @theme-color-text-light;
   }
 }
