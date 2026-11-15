@@ -294,6 +294,11 @@ describe('Transitions/TransitionsSourceHeader', () => {
       expect(wrapper.find('.transitionsSourceHeader__toggle').attributes('disabled')).toBeUndefined();
       expect(wrapper.find('.transitionsSourceHeader__usage').text())
         .toBe('Transitions_PreprocessedPagesUsage:12|20');
+      // what pre-processing does, as a tooltip and for screen readers
+      expect(wrapper.find('.transitionsSourceHeader__toggleWrap').attributes('title'))
+        .toBe('Transitions_PreprocessThisPageHelp');
+      const helpId = wrapper.find('.transitionsSourceHeader__toggle').attributes('aria-describedby');
+      expect(wrapper.find(`#${helpId}`).text()).toBe('Transitions_PreprocessThisPageHelp');
       expect(wrapper.find('.transitionsSourceHeader__manageLink').exists()).toBe(false);
     });
 
@@ -305,6 +310,8 @@ describe('Transitions/TransitionsSourceHeader', () => {
       expect(toggle.attributes('disabled')).toBeDefined();
       expect(wrapper.find('.transitionsSourceHeader__toggleWrap').attributes('title'))
         .toBe('Transitions_PreprocessedPagesLimitReachedHelp:20');
+      const helpId = toggle.attributes('aria-describedby');
+      expect(wrapper.find(`#${helpId}`).text()).toBe('Transitions_PreprocessedPagesLimitReachedHelp:20');
       expect(wrapper.find('.transitionsSourceHeader__usage').exists()).toBe(false);
 
       const link = wrapper.find('.transitionsSourceHeader__manageLink');

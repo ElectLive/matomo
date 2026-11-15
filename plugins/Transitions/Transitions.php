@@ -221,10 +221,10 @@ class Transitions extends \Piwik\Plugin
         $translationKeys[] = 'Transitions_PreprocessedBadgeTooltip';
         $translationKeys[] = 'Transitions_RawDataBadge';
         $translationKeys[] = 'Transitions_PreprocessThisPage';
+        $translationKeys[] = 'Transitions_PreprocessThisPageHelp';
         $translationKeys[] = 'Transitions_StopPreprocessing';
         $translationKeys[] = 'Transitions_StopPreprocessingConfirm';
         $translationKeys[] = 'Transitions_StopPreprocessingHelp';
-        $translationKeys[] = 'Transitions_PreprocessedPagesUsageShort';
         $translationKeys[] = 'Transitions_PreprocessedPagesLimitReachedHelp';
         $translationKeys[] = 'Transitions_ManagePreprocessedPages';
         $translationKeys[] = 'Transitions_PreprocessedPageAddedRebuild';

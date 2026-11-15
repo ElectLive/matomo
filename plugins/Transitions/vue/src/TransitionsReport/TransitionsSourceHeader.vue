@@ -44,13 +44,13 @@
         <template v-else>
           <span
             class="transitionsSourceHeader__toggleWrap"
-            :title="isLimitReached ? limitReachedHelp : undefined"
+            :title="isLimitReached ? limitReachedHelp : addHelp"
           >
             <button
               type="button"
               class="transitionsSourceHeader__toggle"
               :disabled="isSaving || isLimitReached"
-              :aria-describedby="isLimitReached ? limitHelpId : undefined"
+              :aria-describedby="isLimitReached ? limitHelpId : addHelpId"
               @click="add"
             >
               <span aria-hidden="true">&#9734;</span>
@@ -62,6 +62,11 @@
             :id="limitHelpId"
             class="u-visuallyHidden"
           >{{ limitReachedHelp }}</span>
+          <span
+            v-else
+            :id="addHelpId"
+            class="u-visuallyHidden"
+          >{{ addHelp }}</span>
           <a
             v-if="isLimitReached"
             class="transitionsSourceHeader__manageLink"
@@ -185,6 +190,7 @@ export default defineComponent({
     instanceCount += 1;
     return {
       limitHelpId: `transitionsSourceHeaderLimit${instanceCount}`,
+      addHelpId: `transitionsSourceHeaderAdd${instanceCount}`,
       badgeHelpId: `transitionsSourceHeaderBadge${instanceCount}`,
       // each status load starts a generation; a response of an older one is dropped
       statusLoads: { latest: 0 },
@@ -273,6 +279,9 @@ export default defineComponent({
         'Transitions_PreprocessedPagesLimitReachedHelp',
         NumberFormatter.formatNumber(limit),
       );
+    },
+    addHelp(): string {
+      return translate('Transitions_PreprocessThisPageHelp');
     },
     usageLabel(): string {
       return translate(
