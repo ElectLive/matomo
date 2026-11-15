@@ -170,7 +170,7 @@ class PreprocessedPagesTest extends IntegrationTestCase
             $this->api->addPreprocessedPage(1, 'https://example.com/page' . $i);
         }
 
-        $this->assertAddFails(1, 'https://example.com/page21', 'You can select at most 20 pages for pre-processed Transitions.');
+        $this->assertAddFails(1, 'https://example.com/page21', 'You can select at most 20 pages for pre-processed Transitions. Remove a page to add another one.');
         self::assertCount(20, $this->api->getPreprocessedPages(1));
     }
 
@@ -182,7 +182,7 @@ class PreprocessedPagesTest extends IntegrationTestCase
             $this->api->addPreprocessedPage(1, 'https://example.com/page' . $i);
         }
 
-        $this->assertAddFails(1, 'https://example.com/page6', 'You can select at most 5 pages for pre-processed Transitions.');
+        $this->assertAddFails(1, 'https://example.com/page6', 'You can select at most 5 pages for pre-processed Transitions. Remove a page to add another one.');
 
         for ($i = 1; $i <= 6; $i++) {
             $this->api->addPreprocessedPage(2, 'https://example.org/page' . $i);
@@ -199,17 +199,17 @@ class PreprocessedPagesTest extends IntegrationTestCase
         Config::getInstance()->Transitions = ['max_preprocessed_pages' => 2];
 
         self::assertCount(4, $this->api->getPreprocessedPages(1));
-        $this->assertAddFails(1, 'https://example.com/page5', 'You can select at most 2 pages for pre-processed Transitions.');
+        $this->assertAddFails(1, 'https://example.com/page5', 'You can select at most 2 pages for pre-processed Transitions. Remove a page to add another one.');
 
         $this->api->removePreprocessedPage(1, $this->api->getPreprocessedPages(1)[0]['idpage']);
-        $this->assertAddFails(1, 'https://example.com/page5', 'You can select at most 2 pages for pre-processed Transitions.');
+        $this->assertAddFails(1, 'https://example.com/page5', 'You can select at most 2 pages for pre-processed Transitions. Remove a page to add another one.');
     }
 
     public function testLimitOfZeroBlocksAllPages(): void
     {
         Config::getInstance()->Transitions_1 = ['max_preprocessed_pages' => 0];
 
-        $this->assertAddFails(1, 'https://example.com/a', 'You can select at most 0 pages for pre-processed Transitions.');
+        $this->assertAddFails(1, 'https://example.com/a', 'You can select at most 0 pages for pre-processed Transitions. Remove a page to add another one.');
     }
 
     /**
@@ -400,7 +400,7 @@ class PreprocessedPagesTest extends IntegrationTestCase
         Config::getInstance()->Transitions_1 = ['max_preprocessed_pages' => '1'];
 
         $this->api->addPreprocessedPage(1, 'https://example.com/a');
-        $this->assertAddFails(1, 'https://example.com/b', 'You can select at most 1 pages for pre-processed Transitions.');
+        $this->assertAddFails(1, 'https://example.com/b', 'You can select at most 1 pages for pre-processed Transitions. Remove a page to add another one.');
     }
 
     public function testMeasuresTheLengthOfUrlsSentOverHttpBeforeEncoding(): void
@@ -713,8 +713,8 @@ class PreprocessedPagesTest extends IntegrationTestCase
 
         $this->api->addPreprocessedPage(1, 'https://example.com/c');
 
-        $this->assertAddFails(1, 'https://example.com/d', 'You can select at most 2 pages for pre-processed Transitions.');
-        $this->assertAddFails(1, 'https://example.com/a', 'You can select at most 2 pages for pre-processed Transitions.');
+        $this->assertAddFails(1, 'https://example.com/d', 'You can select at most 2 pages for pre-processed Transitions. Remove a page to add another one.');
+        $this->assertAddFails(1, 'https://example.com/a', 'You can select at most 2 pages for pre-processed Transitions. Remove a page to add another one.');
     }
 
     public function testAddingARemovedPageAgainRestoresIt(): void
