@@ -1303,6 +1303,48 @@ class QueueConsumerTest extends IntegrationTestCase
     }
 
     /**
+     * Invalidations a killed process left in progress are released after archive_failure_recovery_timeout and then
+     * processed like the others. Until then, they hold back only the longer periods of their own report.
+     */
+    public function testSingleReportsLeftInProgressByAKilledProcess()
+    {
+        Fixture::createWebsite('2015-02-03');
+
+        $cronArchive = $this->getMockCronArchive();
+        $cronArchive->init();
+
+        $this->insertInvalidations([
+            // killed just now
+            ['idarchive' => 1, 'name' => 'done.Transitions', 'idsite' => 1, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => 'Transitions_1_pageviews', 'status' => 1, 'ts_started' => Date::now()->getDatetime()],
+            ['idarchive' => 2, 'name' => 'done.Transitions', 'idsite' => 1, 'date1' => '2018-03-01', 'date2' => '2018-03-31', 'period' => Month::PERIOD_ID, 'report' => 'Transitions_1_pageviews'],
+            ['idarchive' => 3, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-01', 'date2' => '2018-03-31', 'period' => Month::PERIOD_ID, 'report' => 'Actions_hits'],
+            // killed two days ago
+            ['idarchive' => 4, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-07', 'date2' => '2018-03-07', 'period' => Day::PERIOD_ID, 'report' => 'Actions_hits', 'status' => 1, 'ts_started' => Date::now()->subDay(2)->getDatetime()],
+            ['idarchive' => 5, 'name' => 'done', 'idsite' => 1, 'date1' => '2018-03-01', 'date2' => '2018-03-31', 'period' => Month::PERIOD_ID, 'report' => null],
+        ]);
+
+        $model = new Model();
+        $this->assertEquals(1, $model->resetFailedArchivingJobs());
+
+        $queueConsumer = new QueueConsumer(
+            new NullLogger(),
+            new FixedSiteIds([1]),
+            3,
+            24,
+            $model,
+            new SegmentArchiving(),
+            $cronArchive,
+            $this->makeTestArchiveFilter()
+        );
+
+        $this->assertSame([5, 4, 3], $this->consumeInvalidations($queueConsumer, null));
+        $this->assertEquals(
+            ['1', '2'],
+            array_column(Db::fetchAll('SELECT idarchive FROM ' . Common::prefixTable('archive_invalidations') . ' ORDER BY idarchive'), 'idarchive')
+        );
+    }
+
+    /**
      * The archive of a period with today built for all plugins before a single report's days were archived again
      * holds the report's previous data of these days.
      */
@@ -1789,11 +1831,36 @@ class QueueConsumerTest extends IntegrationTestCase
             'expected' => null,
         ];
 
-        yield 'a single report in progress holds back a single report of a period containing it' => [
+        yield 'a single report in progress holds back the same report of a period containing it' => [
+            'existingInvalidations' => [
+                ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
+            ],
+            'archiveToProcess' => ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-01', 'date2' => '2020-03-31', 'period' => Month::PERIOD_ID],
+            'expected' => 'lower or same period in progress (period = day, date = 2020-03-04)',
+        ];
+
+        // for example a crashed one, which is only released after archive_failure_recovery_timeout
+        yield 'a single report in progress does not hold back another report of a period containing it' => [
             'existingInvalidations' => [
                 ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
             ],
             'archiveToProcess' => ['name' => 'done.Actions', 'report' => 'otherReport', 'idsite' => 1, 'date1' => '2020-03-01', 'date2' => '2020-03-31', 'period' => Month::PERIOD_ID],
+            'expected' => null,
+        ];
+
+        yield 'a single report in progress does not hold back the same report of another plugin' => [
+            'existingInvalidations' => [
+                ['name' => 'done.Transitions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
+            ],
+            'archiveToProcess' => ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID],
+            'expected' => null,
+        ];
+
+        yield 'an archive of a plugin in progress holds back a single report of a period containing it' => [
+            'existingInvalidations' => [
+                ['name' => 'done.Transitions', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
+            ],
+            'archiveToProcess' => ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-01', 'date2' => '2020-03-31', 'period' => Month::PERIOD_ID],
             'expected' => 'lower or same period in progress (period = day, date = 2020-03-04)',
         ];
 

@@ -40,7 +40,7 @@ The Product Changelog at **[matomo.org/changelog](https://matomo.org/changelog)*
 * A partial archive, one written for `Piwik\ArchiveProcessor\Parameters::setArchiveOnlyReport()`, is now always stored under the done flag of its plugin, also outside `core:archive`.
 * Partial archives of a plugin older than a finished archive for all plugins of the same site, period and segment are deleted, when it is finished or by the archive purge, as reports no longer read them.
 * `core:archive` processes invalidations of a single report, such as those of `ArchiveInvalidator::reArchiveReport()` with a report, after the other invalidations of all its websites and after their `CronArchive.archiveSingleSite.finish` event, unless `--force-report` is used.
-* Archives of other invalidations no longer wait for a single report's archive in progress.
+* Archives of other invalidations, and of other single reports, no longer wait for a single report's archive in progress.
 * A single report of a period with today is archived again also when a recent archive of the period exists.
 * An invalidation of a single report no longer marks the overlapping range archives as invalidated, as it marks no other archive either.
 * Different `core:archive` processes can now archive "All visits" and segments of the same site and an overlapping period at the same time. State that an archiver shares across a site's segments must therefore also be safe to use while the "All visits" archive is processed.

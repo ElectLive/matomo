@@ -510,6 +510,15 @@ class QueueConsumer
                 continue;
             }
 
+            // and a single report waits only for its own archives and those of other invalidations
+            if (
+                !empty($archiveToProcess['report'])
+                && !empty($archiveBeingProcessed['report'])
+                && ($archiveToProcess['name'] !== $archiveBeingProcessed['name'] || $archiveToProcess['report'] !== $archiveBeingProcessed['report'])
+            ) {
+                continue;
+            }
+
             $processedPeriodLabel = $periods[$archiveBeingProcessed['period']];
             $processedPeriodDate = 'range' === $processedPeriodLabel
                 ? $archiveBeingProcessed['date1'] . ',' . $archiveBeingProcessed['date2']
