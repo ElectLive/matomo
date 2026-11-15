@@ -32,6 +32,7 @@ use Piwik\Log\LoggerInterface;
 use Piwik\Metrics;
 use Piwik\Option;
 use Piwik\Piwik;
+use Piwik\Plugin\Manager as PluginManager;
 use Piwik\Period\Day;
 use Piwik\Period\Month;
 use Piwik\Period\Week;
@@ -722,6 +723,32 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
             'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' WHERE idsite = 1 AND period = ? AND name = ?',
             [Week::PERIOD_ID, Records::INVALIDATED]
         ));
+    }
+
+    /**
+     * Core invalidates archives without telling the plugin while it is deactivated, so its activation marks the partial
+     * archives of the periods with an invalidated archive.
+     */
+    public function testActivatingThePluginMarksThePartialArchivesOfPeriodsInvalidatedMeanwhile(): void
+    {
+        $this->archiveAllPlugins(self::DAY);
+        $this->selectPage(self::PAGE_URL);
+        self::assertSame(1, $this->request('day', self::DAY)['preprocessed']);
+        $this->insertPartialArchive(1, Day::PERIOD_ID, '2010-03-20', '2010-03-20', '');
+
+        // as core does
+        Db::query(
+            'UPDATE ' . Common::prefixTable('archive_numeric_2010_03') . " SET value = ? WHERE idsite = 1 AND period = 1 AND date1 = ? AND name = 'done'",
+            [ArchiveWriter::DONE_INVALIDATED, self::DAY]
+        );
+        $this->setBrowserArchiving(false);
+        self::assertSame(1, $this->request('day', self::DAY)['preprocessed']);
+
+        PluginManager::getInstance()->getLoadedPlugin('Transitions')->activate();
+
+        self::assertSame(1, $this->countPartialArchives(self::DAY, Day::PERIOD_ID, true));
+        self::assertArrayNotHasKey('preprocessed', $this->request('day', self::DAY));
+        self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, '2010-03-20', ''));
     }
 
     public function testADayBuildDuringAnInvalidationOfTheDayIsNotKept(): void

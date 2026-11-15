@@ -42,6 +42,8 @@ final class PartialArchives
 
     private const IDARCHIVES_PER_QUERY = 1000;
 
+    private const SITES_PER_QUERY = 100;
+
     public function __construct(
         private readonly Dao $dao,
         private readonly Model $model
@@ -86,6 +88,33 @@ final class PartialArchives
 
         foreach ($periodsByTable as $table => $periodsOfTable) {
             $this->invalidatePartialArchives($table, $idSites, array_values($periodsOfTable), $segment);
+        }
+    }
+
+    /**
+     * Marks the partial archives of the periods and segments that have an invalidated archive, as core invalidates
+     * archives without telling this plugin while it is deactivated, see
+     * {@link \Piwik\Plugins\Transitions\Transitions::activate()}. Those built after the invalidation are marked too, and
+     * are built again like the others.
+     */
+    public function invalidateWhereArchivesAreInvalidated(): void
+    {
+        $idSites = $this->dao->getSitesWithAnyPages(array_values(array_map('intval', StaticContainer::get(SitesModel::class)->getSitesId())));
+        if (empty($idSites)) {
+            return;
+        }
+
+        foreach (ArchiveTableCreator::getTablesArchivesInstalled(ArchiveTableCreator::NUMERIC_TABLE) as $table) {
+            foreach (array_chunk($idSites, self::SITES_PER_QUERY) as $idSitesOfChunk) {
+                $rows = Db::fetchAll(
+                    'SELECT p.idarchive, p.idsite, p.date1, p.date2, p.period, p.ts_archived FROM `' . $table . '` p'
+                    . ' WHERE p.idsite IN (' . implode(',', $idSitesOfChunk) . ") AND p.name LIKE 'done%.Transitions' AND p.value = ?"
+                    . ' AND EXISTS (SELECT 1 FROM `' . $table . '` i WHERE i.idsite = p.idsite AND i.date1 = p.date1 AND i.date2 = p.date2'
+                    . " AND i.period = p.period AND i.name IN (SUBSTRING_INDEX(p.name, '.', 1), p.name) AND i.value = ?)",
+                    [ArchiveWriter::DONE_PARTIAL, ArchiveWriter::DONE_INVALIDATED]
+                );
+                $this->markArchives($table, $rows);
+            }
         }
     }
 
@@ -205,6 +234,14 @@ final class PartialArchives
             $bind
         );
 
+        $this->markArchives($table, $rows);
+    }
+
+    /**
+     * @param array<array<mixed>> $rows the archives' idarchive, idsite, date1, date2, period and ts_archived
+     */
+    private function markArchives(string $table, array $rows): void
+    {
         foreach (array_chunk($rows, self::IDARCHIVES_PER_QUERY) as $chunk) {
             $values = [];
             $bind = [];

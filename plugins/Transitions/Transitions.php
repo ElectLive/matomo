@@ -41,13 +41,15 @@ class Transitions extends \Piwik\Plugin
     }
 
     /**
-     * Catches up on users and websites deleted while the plugin was deactivated.
+     * Catches up on users and websites deleted, and archives invalidated, while the plugin was deactivated.
      */
     public function activate()
     {
         StaticContainer::get(PreprocessedPagesDao::class)->cleanUpDeletedUsersAndSites();
         ArchivingMode::forgetDeletedSites();
-        StaticContainer::get(PartialArchives::class)->forgetDeletedSites();
+        $partialArchives = StaticContainer::get(PartialArchives::class);
+        $partialArchives->forgetDeletedSites();
+        $partialArchives->invalidateWhereArchivesAreInvalidated();
     }
 
     public function anonymizePreprocessedPagesCreatedBy(string $userLogin): void
