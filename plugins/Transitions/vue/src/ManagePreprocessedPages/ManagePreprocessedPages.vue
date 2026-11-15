@@ -113,7 +113,8 @@
             <td
               :id="`${idPrefix}Url${page.idpage}`"
               class="managePreprocessedPages__url"
-            >{{ displayUrl(page.url) }}</td>
+              :title="urlTitle(page.url)"
+            >{{ readableUrl(page.url) }}</td>
             <td
               class="managePreprocessedPages__date"
               :data-label="translate('Transitions_ColumnDateAdded')"
@@ -253,6 +254,7 @@ import { Field } from 'CorePluginsAdmin';
 import apiErrorText from '../apiErrorText';
 import {
   displayUrl,
+  readableUrl,
   formatUtcDateTime,
   matchKey,
   pageKey,
@@ -640,6 +642,13 @@ export default defineComponent({
     },
     displayUrl(url: string): string {
       return displayUrl(url);
+    },
+    readableUrl(url: string): string {
+      return readableUrl(url);
+    },
+    /** The stored URL, where the list shows it decoded. */
+    urlTitle(url: string): string|undefined {
+      return readableUrl(url) !== displayUrl(url) ? displayUrl(url) : undefined;
     },
     formatNumber(value: number|string): string {
       return NumberFormatter.formatNumber(Number(value));

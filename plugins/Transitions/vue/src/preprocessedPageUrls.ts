@@ -14,11 +14,26 @@ export function displayUrl(url: string): string {
   return Matomo.helper.htmlDecode(url);
 }
 
+/**
+ * The URL as the Pages report shows it, with percent-encoded UTF-8 decoded, eg `%E6%A9%9F` as `機`.
+ * For display only: the stored URL, which a suggestion or an add must match, stays encoded.
+ */
+export function readableUrl(url: string): string {
+  return displayUrl(url).replace(/(%[0-9A-Fa-f]{2})+/g, (encoded) => {
+    try {
+      return decodeURIComponent(encoded);
+    } catch (e) {
+      // not UTF-8
+      return encoded;
+    }
+  });
+}
+
 /** The question of the inline confirmation before a page is removed. */
 export function stopConfirmLabel(url: string): string {
   return translate(
     'Transitions_StopPreprocessingConfirm',
-    displayUrl(url).replace(/^https?:\/\/(www\.)?/i, ''),
+    readableUrl(url).replace(/^https?:\/\/(www\.)?/i, ''),
   );
 }
 

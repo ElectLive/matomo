@@ -221,6 +221,24 @@ describe('Transitions/ManagePreprocessedPages', () => {
         .toContain('Transitions_StopPreprocessingConfirm:example.org/a?b=<x>&c=1');
     });
 
+    it('should show percent-encoded UTF-8 decoded, as the Pages report does, with the stored URL as title', async () => {
+      answer(() => [
+        page(1, { url: 'https://example.org/%E6%A9%9F%E8%83%BD?q=a%20b&x=%E2' }),
+        page(2, { url: 'https://example.org/plain' }),
+      ]);
+      const wrapper = await mountPage();
+
+      const cells = wrapper.findAll('.managePreprocessedPages__url');
+      // a sequence that isn't UTF-8 stays as it is
+      expect(cells[0].text()).toBe('https://example.org/機能?q=a b&x=%E2');
+      expect(cells[0].attributes('title')).toBe('https://example.org/%E6%A9%9F%E8%83%BD?q=a%20b&x=%E2');
+      expect(cells[1].attributes('title')).toBeUndefined();
+
+      await wrapper.find('.managePreprocessedPages__remove').trigger('click');
+      expect(wrapper.find('.managePreprocessedPages__confirmText').text())
+        .toContain('Transitions_StopPreprocessingConfirm:example.org/機能?q=a b&x=%E2');
+    });
+
     it('should keep the newest list when reloads finish out of order', async () => {
       const pending: ((list: PreprocessedPage[]) => void)[] = [];
       state.fetch.mockImplementation((params: Record<string, unknown>) => {
