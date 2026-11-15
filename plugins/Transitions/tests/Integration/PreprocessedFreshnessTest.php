@@ -463,6 +463,31 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame(1, $this->countPartialArchives(self::DAY));
     }
 
+    public function testWithoutCronARequestApplyingAnErasureKeepsTheRecordsOfOtherPagesUntilTheDayIsBuiltAgain(): void
+    {
+        $this->trackPageviews(self::DAY . ' 09:00:00', 2);
+        // archived before the pages were selected, so their records are in partial archives only
+        $this->archiveAllPlugins(self::DAY);
+        $this->selectPage(self::PAGE_URL);
+        $otherIdPage = $this->selectPage(self::OTHER_PAGE_URL);
+        self::assertSame(1, $this->request('day', self::DAY, self::OTHER_PAGE_URL)['preprocessed']);
+
+        // a request for the first page applies the erasure
+        $this->deleteVisitOfPage(self::DAY);
+        self::assertSame(1, $this->request('day', self::DAY)['preprocessed']);
+        self::assertArrayNotHasKey(self::DAY, StaticContainer::get(ArchiveInvalidator::class)->getRememberedArchivedReportsThatShouldBeInvalidated(1));
+
+        // the other page's records are kept, not served
+        self::assertSame(1, $this->countPartialArchives(self::DAY, 1, true));
+        self::assertContains(Records::getRecordName($otherIdPage, Records::PAGEVIEWS), $this->getPartialArchiveRecordNames(self::DAY));
+
+        // nor are they replaced by records built from the logs once these are deleted
+        $this->setNow('2010-03-20 00:30:00');
+        PrivacyManager::savePurgeDataSettings(['delete_logs_enable' => 1, 'delete_logs_older_than' => 10]);
+        self::assertArrayNotHasKey('preprocessed', $this->request('day', self::DAY, self::OTHER_PAGE_URL));
+        self::assertSame(1, $this->countPartialArchives(self::DAY, 1, true));
+    }
+
     /**
      * @dataProvider getSegmentArchiveKinds
      */
@@ -527,9 +552,9 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
     /**
      * @dataProvider getInvalidations
      * @param array<mixed> $arguments the arguments of markArchivesAsInvalidated() after the websites; a segment as string
-     * @param list<string> $kept
+     * @param list<string> $served
      */
-    public function testAnInvalidationDeletesThePartialArchivesOfThePeriodsCoreInvalidatesOnly(array $arguments, bool $withDeletedLogs, array $kept): void
+    public function testAnInvalidationInvalidatesThePartialArchivesOfThePeriodsCoreInvalidatesOnly(array $arguments, bool $withDeletedLogs, array $served): void
     {
         $this->selectPage(self::PAGE_URL);
         Fixture::createWebsite('2010-01-01 00:00:00');
@@ -557,9 +582,12 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         foreach ($partialArchives as $label => [$idSite, $periodId, $date1, , $segment]) {
             if ($this->countPartialArchivesOf($idSite, $periodId, $date1, $segment) > 0) {
                 $remaining[] = $label;
+            } else {
+                // kept until its period is archived again
+                self::assertSame(1, $this->countPartialArchivesOf($idSite, $periodId, $date1, $segment, true), $label);
             }
         }
-        self::assertSame($kept, $remaining);
+        self::assertSame($served, $remaining);
     }
 
     /**
@@ -1145,12 +1173,16 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         return $report;
     }
 
-    private function countPartialArchives(string $date1, int $periodId = 1): int
+    /**
+     * Counts the partial archives whose records are served, those not marked invalidated.
+     */
+    private function countPartialArchives(string $date1, int $periodId = 1, bool $invalidated = false): int
     {
         return (int) Db::fetchOne(
             'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03')
-            . " WHERE idsite = 1 AND period = ? AND date1 = ? AND name LIKE 'done%.Transitions' AND value = ?",
-            [$periodId, $date1, ArchiveWriter::DONE_PARTIAL]
+            . " p WHERE idsite = 1 AND period = ? AND date1 = ? AND name LIKE 'done%.Transitions' AND value = ?"
+            . ' AND ' . ($invalidated ? '' : 'NOT ') . 'EXISTS (SELECT 1 FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' m WHERE m.idarchive = p.idarchive AND m.name = ?)',
+            [$periodId, $date1, ArchiveWriter::DONE_PARTIAL, Records::INVALIDATED]
         );
     }
 
@@ -1164,11 +1196,17 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         );
     }
 
-    private function countPartialArchivesOf(int $idSite, int $periodId, string $date1, string $segment): int
+    /**
+     * Counts the partial archives whose records are served, those not marked invalidated.
+     */
+    private function countPartialArchivesOf(int $idSite, int $periodId, string $date1, string $segment, bool $invalidated = false): int
     {
+        $table = ArchiveTableCreator::getNumericTable(Date::factory($date1), true);
+
         return (int) Db::fetchOne(
-            'SELECT COUNT(*) FROM ' . ArchiveTableCreator::getNumericTable(Date::factory($date1), true) . ' WHERE idsite = ? AND period = ? AND date1 = ? AND name = ? AND value = ?',
-            [$idSite, $periodId, $date1, $this->getPartialDoneFlag($idSite, $segment), ArchiveWriter::DONE_PARTIAL]
+            'SELECT COUNT(*) FROM ' . $table . ' p WHERE idsite = ? AND period = ? AND date1 = ? AND name = ? AND value = ?'
+            . ' AND ' . ($invalidated ? '' : 'NOT ') . 'EXISTS (SELECT 1 FROM ' . $table . ' m WHERE m.idarchive = p.idarchive AND m.name = ?)',
+            [$idSite, $periodId, $date1, $this->getPartialDoneFlag($idSite, $segment), ArchiveWriter::DONE_PARTIAL, Records::INVALIDATED]
         );
     }
 

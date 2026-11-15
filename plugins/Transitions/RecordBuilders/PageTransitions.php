@@ -461,9 +461,9 @@ class PageTransitions extends RecordBuilder
     /**
      * The selected pages of the website that aren't removed, plus those removed since the period started, once per
      * archive: archiving a period again, a day too, keeps the records of the removed pages' days. A day builds a
-     * removed page only if the day's current archives hold its records, as each page costs log queries. A day whose
-     * logs were deleted is archived without any records by core anyway. An archive of single pages, which are never
-     * removed ones, builds no removed page.
+     * removed page only if the day's current archives hold its records, invalidated ones and partial archives
+     * included, as each page costs log queries. A day whose logs were deleted is archived without any records by core
+     * anyway. An archive of single pages, which are never removed ones, builds no removed page.
      *
      * @return list<int>
      */

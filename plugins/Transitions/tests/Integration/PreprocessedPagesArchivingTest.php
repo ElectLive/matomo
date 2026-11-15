@@ -512,6 +512,46 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
         self::assertSame($this->getExpectedRecordNames($idPage), $this->getStoredRecordNames(1, self::DAY, $this->getLatestIdArchive(1, self::DAY)));
     }
 
+    public function testARemovedPageWhoseRecordsOfADayAreInAPartialArchiveOnlyIsBuiltWhenTheDayIsArchivedAgain(): void
+    {
+        // archived before the page was selected, so the page's records are in the partial archive of its rebuild
+        $this->archive('day', self::DAY);
+        $idPage = $this->selectPage(self::PAGE_URL);
+        $this->rebuild($idPage, 'day', self::DAY);
+        StaticContainer::get(Service::class)->removePage(1, $idPage);
+        $stored = $this->getStoredNumeric($idPage, Records::PAGEVIEWS, 1, self::DAY);
+        self::assertGreaterThan(0, $stored);
+
+        // late data, for example
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        $this->archive('day', self::DAY);
+
+        $idArchive = $this->getLatestIdArchive(1, self::DAY);
+        self::assertSame($this->getExpectedRecordNames($idPage), $this->getStoredRecordNames(1, self::DAY, $idArchive));
+        self::assertSame($stored, (float) Db::fetchOne(
+            'SELECT value FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' WHERE idarchive = ? AND name = ?',
+            [$idArchive, Records::getRecordName($idPage, Records::PAGEVIEWS)]
+        ));
+    }
+
+    /**
+     * Archives the page alone, as `core:archive` runs the rebuild scheduled when it is selected.
+     */
+    private function rebuild(int $idPage, string $period, string $date): void
+    {
+        $_GET['trigger'] = 'archivephp';
+        $_GET['pluginOnly'] = '1';
+        $_GET['requestedReport'] = Records::getRebuildReportName($idPage);
+        try {
+            $params = new Parameters(new Site(1), PeriodFactory::build($period, $date), new Segment('', [1]));
+            $params->setRequestedPlugin('Transitions');
+            $params->setArchiveOnlyReport(Records::getRebuildReportName($idPage));
+            (new Loader($params))->prepareArchive('Transitions');
+        } finally {
+            unset($_GET['trigger'], $_GET['pluginOnly'], $_GET['requestedReport']);
+        }
+    }
+
     private function getLatestIdArchive(int $periodId, string $date1): int
     {
         return (int) Db::fetchOne(

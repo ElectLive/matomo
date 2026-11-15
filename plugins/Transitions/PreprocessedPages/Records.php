@@ -70,6 +70,12 @@ final class Records
     public const DAYS_WITH_VISITS = 'Transitions_daysWithVisits';
 
     /**
+     * Set in a partial archive whose period core invalidated after it was built. Its records are not served, like
+     * those of an invalidated archive, and it is deleted like any partial archive once its period is archived again.
+     */
+    public const INVALIDATED = 'Transitions_invalidated';
+
+    /**
      * Label of search engines without a name in the referrers subtable; the report shows it as `General_Unknown`.
      */
     public const UNKNOWN_SEARCH_ENGINE_LABEL = '';

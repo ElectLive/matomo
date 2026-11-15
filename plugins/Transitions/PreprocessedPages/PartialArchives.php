@@ -29,16 +29,18 @@ use Piwik\Segment;
  * The partial archives holding pre-processed Transitions records, `done<segment hash>.Transitions`: written by the
  * rebuild of an added page and by builds within report requests.
  *
- * Core doesn't invalidate partial archives, so they are deleted when core invalidates the periods they hold. An
- * invalidation core only remembers, like that of a data subject's deleted visits, deletes them once core applies it.
- * Until then they are served like core's own archives, and they stay like those if core skips it, as the logs of the
- * day were deleted meanwhile.
+ * Core doesn't invalidate partial archives, so they are marked {@link Records::INVALIDATED} when core invalidates the
+ * periods they hold. Their records are then no longer served, but they are kept, like core's invalidated archives,
+ * until the period is archived again, which also builds the removed pages they hold records of. An invalidation core
+ * only remembers, like that of a data subject's deleted visits, marks them once core applies it. Until then they are
+ * served like core's own archives, and they stay like those if core skips it, as the logs of the day were deleted
+ * meanwhile.
  */
 final class PartialArchives
 {
     private const INVALIDATION_MARKER_OPTION_PREFIX = 'Transitions.invalidated_';
 
-    private const IDARCHIVES_PER_DELETE = 1000;
+    private const IDARCHIVES_PER_QUERY = 1000;
 
     public function __construct(
         private readonly Dao $dao,
@@ -47,20 +49,21 @@ final class PartialArchives
     }
 
     /**
-     * Deletes the partial archives of the periods core invalidated, for the segment, or for all segments without one.
-     * A build of a day within a request that runs meanwhile notices it, see {@link getInvalidationMarker()}.
+     * Marks the partial archives of the periods core invalidated as invalidated, for the segment, or for all segments
+     * without one. A build of a day within a request that runs meanwhile notices it, see {@link getInvalidationMarker()}.
      *
-     * @param array<int|string> $idSites
-     * @param array<mixed> $periods the periods core invalidated, see `Archiving.markArchivesAsInvalidated.end`
+     * @param list<int> $idSites
+     * @param list<Period> $periods the periods core invalidated, see `Archiving.markArchivesAsInvalidated.end`
      */
-    public function deleteForInvalidation(array $idSites, array $periods, ?Segment $segment): void
+    public function invalidateForPeriods(array $idSites, array $periods, ?Segment $segment): void
     {
-        $periods = array_values(array_filter($periods, fn($period): bool => $period instanceof Period && !$period instanceof Range));
+        // ranges aren't archived, see PageTransitions
+        $periods = array_values(array_filter($periods, fn(Period $period): bool => !$period instanceof Range));
         if (empty($periods) || empty($idSites)) {
             return;
         }
 
-        $idSites = $this->dao->getSitesWithAnyPages(array_values(array_unique(array_map('intval', $idSites))));
+        $idSites = $this->dao->getSitesWithAnyPages(array_values(array_unique($idSites)));
         if (empty($idSites)) {
             return;
         }
@@ -82,7 +85,7 @@ final class PartialArchives
         }
 
         foreach ($periodsByTable as $table => $periodsOfTable) {
-            $this->deletePartialArchives($table, $idSites, array_values($periodsOfTable), $segment);
+            $this->invalidatePartialArchives($table, $idSites, array_values($periodsOfTable), $segment);
         }
     }
 
@@ -178,7 +181,7 @@ final class PartialArchives
      * @param list<int> $idSites
      * @param list<Period> $periods
      */
-    private function deletePartialArchives(string $table, array $idSites, array $periods, ?Segment $segment): void
+    private function invalidatePartialArchives(string $table, array $idSites, array $periods, ?Segment $segment): void
     {
         $bind = [];
         $periodConditions = [];
@@ -195,15 +198,25 @@ final class PartialArchives
         }
 
         $rows = Db::fetchAll(
-            'SELECT idarchive FROM `' . $table . '` WHERE idsite IN (' . implode(',', $idSites) . ')'
+            'SELECT idarchive, idsite, date1, date2, period, ts_archived FROM `' . $table . '` WHERE idsite IN (' . implode(',', $idSites) . ')'
             . ' AND (' . implode(' OR ', $periodConditions) . ') AND ' . $nameCondition
             . ' AND value = ' . ArchiveWriter::DONE_PARTIAL,
             $bind
         );
 
-        $idArchives = array_map(fn(array $row): int => (int) $row['idarchive'], $rows);
-        foreach (array_chunk($idArchives, self::IDARCHIVES_PER_DELETE) as $chunk) {
-            $this->deleteArchives($periods[0], $chunk);
+        foreach (array_chunk($rows, self::IDARCHIVES_PER_QUERY) as $chunk) {
+            $values = [];
+            $bind = [];
+            foreach ($chunk as $row) {
+                $values[] = '(?, ?, ?, ?, ?, ?, ?, 1)';
+                array_push($bind, $row['idarchive'], $row['idsite'], $row['date1'], $row['date2'], $row['period'], $row['ts_archived'], Records::INVALIDATED);
+            }
+
+            // the partial archive stays DONE_PARTIAL, so core deletes it once a newer archive replaces it
+            Db::query(
+                'INSERT IGNORE INTO `' . $table . '` (idarchive, idsite, date1, date2, period, ts_archived, name, value) VALUES ' . implode(',', $values),
+                $bind
+            );
         }
     }
 }

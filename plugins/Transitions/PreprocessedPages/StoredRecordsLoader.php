@@ -23,6 +23,7 @@ use Piwik\Date;
 use Piwik\Log\LoggerInterface;
 use Piwik\Period;
 use Piwik\Period\Range;
+use Piwik\Plugins\PrivacyManager\PrivacyManager;
 use Piwik\Plugins\Transitions\RecordBuilders\PageTransitions;
 use Piwik\Segment;
 use Piwik\Site;
@@ -37,8 +38,9 @@ use Piwik\Site;
  *   without records is summed from the stored records of its subperiods, down to days. Nothing else is built.
  * - Records read from an invalidated archive are never used: a longer period is summed from its subperiods instead,
  *   and a day is built where one of the above allows it; the records built then are used until the day is invalidated
- *   again, which deletes them (see {@link PartialArchives}). With browser archiving, the invalidations remembered for
- *   the days of the request, for example by the deletion of a data subject's visits, are applied first.
+ *   again (see {@link PartialArchives}). A day whose logs were deleted is never built. With browser archiving, the
+ *   invalidations remembered for the days of the request, for example by the deletion of a data subject's visits, are
+ *   applied first.
  *
  * Records are served and built for all visits and pre-processed segments only, as a partial archive of the page's
  * records. At most {@link MAX_SUMMED_PERIODS} periods are summed for a request.
@@ -291,7 +293,7 @@ final class StoredRecordsLoader
     /**
      * Applies the invalidations remembered for the days of the periods, for example after a data subject's visits were
      * deleted, as browser archiving does before it reads archives. They are applied for all segments, as `core:archive`
-     * does, so they are forgotten afterwards. Applying them deletes the Transitions records built in partial archives
+     * does, so they are forgotten afterwards. Applying them invalidates the Transitions records built in partial archives
      * from the previous data, see {@link PartialArchives}, which are built again where allowed.
      *
      * @param list<Period> $periods
@@ -379,7 +381,7 @@ final class StoredRecordsLoader
      * Builds the page's day records unless another request does or did meanwhile. A request waits for another one
      * building the same records, and uses the stored records if that takes too long. Records built while the day was
      * invalidated, maybe from the logs before the change, are deleted. Older records of the page built alone are
-     * deleted once the new ones are written.
+     * deleted once the new ones are written. A day whose logs were deleted isn't built, so its stored records stay.
      *
      * @param bool $isRefresh whether existing records are rebuilt, else missing ones are built
      * @return bool whether the records exist now, or, for a refresh, whether stored records may be served
@@ -390,6 +392,17 @@ final class StoredRecordsLoader
         $today = Date::factory('now', $site->getTimezone())->toString();
         if (!$this->isListed($idSite, $idPage) || $day->getDateStart()->toString() > $today) {
             return false;
+        }
+
+        // as core skips invalidating such a day, see ArchiveInvalidator
+        $purgeDataSettings = PrivacyManager::getPurgeDataSettings();
+        $logsDeletedDays = (int) $purgeDataSettings['delete_logs_older_than'];
+        if (
+            !empty($purgeDataSettings['delete_logs_enable'])
+            && $logsDeletedDays > 0
+            && $day->getDateStart()->isEarlier(Date::factory('today')->subDay($logsDeletedDays))
+        ) {
+            return $isRefresh;
         }
 
         // all queries, the visits of the day too, get the time limit of the report's log queries, and the lock
