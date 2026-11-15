@@ -638,7 +638,7 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertNull($partialArchives->getInvalidationMarker(1));
     }
 
-    public function testAFailureToDeletePartialArchivesDoesNotStopTheInvalidation(): void
+    public function testAFailureToMarkPartialArchivesDoesNotStopTheInvalidation(): void
     {
         $this->archiveAllPlugins(self::DAY);
         $this->insertPartialArchive(1, Day::PERIOD_ID, self::DAY, self::DAY, '');
@@ -695,10 +695,24 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
 
         Piwik::postEvent('Archiving.markArchivesAsInvalidated.end', [['1', 'x'], [new Day(Date::factory(self::DAY)), self::DAY], self::SEGMENT, null]);
 
-        self::assertStringContainsString('was posted with websites, periods or a segment of another type', $logger->output);
+        self::assertStringContainsString('was posted with websites, periods, a segment or a name of another type', $logger->output);
         self::assertSame(0, $this->countPartialArchivesOf(1, Day::PERIOD_ID, self::DAY, ''));
         self::assertSame(0, $this->countPartialArchivesOf(1, Day::PERIOD_ID, self::DAY, self::SEGMENT));
         self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, '2010-03-20', ''));
+
+        // site IDs other than integers aren't read as another website's
+        $logger = new FakeLogger();
+        StaticContainer::getContainer()->set(LoggerInterface::class, $logger);
+        Piwik::postEvent('Archiving.markArchivesAsInvalidated.end', [['1.5', '1e0', 1.9], [new Day(Date::factory('2010-03-20'))], null, null]);
+        self::assertStringContainsString('of another type', $logger->output);
+        self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, '2010-03-20', ''));
+
+        // a name of another type stands for all plugins
+        $logger = new FakeLogger();
+        StaticContainer::getContainer()->set(LoggerInterface::class, $logger);
+        Piwik::postEvent('Archiving.markArchivesAsInvalidated.end', [[1], [new Day(Date::factory('2010-03-20'))], null, ['Transitions']]);
+        self::assertStringContainsString('of another type', $logger->output);
+        self::assertSame(0, $this->countPartialArchivesOf(1, Day::PERIOD_ID, '2010-03-20', ''));
     }
 
     /**

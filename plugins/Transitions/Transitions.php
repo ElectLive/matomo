@@ -76,8 +76,9 @@ class Transitions extends \Piwik\Plugin
      * Core doesn't invalidate partial archives, so the pre-processed pages' records built before an invalidation, for
      * example of the visits of a deleted data subject, are no longer served once core applies it, see
      * {@link PartialArchives}. Invalidations of another plugin's reports, or of single reports, leave them. A failure
-     * doesn't stop core's invalidation. Arguments of other types are logged; a segment of another type stands for all
-     * segments, as no records may be served from the previous data.
+     * doesn't stop core's invalidation. Arguments of other types, and site IDs other than integers, are logged; a
+     * segment or name of another type stands for all segments or plugins, as no records may be served from the
+     * previous data.
      *
      * @param mixed $idSites
      * @param mixed $periods
@@ -86,21 +87,26 @@ class Transitions extends \Piwik\Plugin
      */
     public function invalidatePartialArchivesOfPeriods($idSites, $periods, $segment, $name): void
     {
-        if (!empty($name) && $name !== 'Transitions') {
+        $isValidName = $name === null || is_string($name);
+        if ($isValidName && !empty($name) && $name !== 'Transitions') {
             return;
         }
 
         $logger = StaticContainer::get(LoggerInterface::class);
         $idSites = is_array($idSites) ? $idSites : [$idSites];
         $periods = is_array($periods) ? $periods : [$periods];
-        $validIdSites = array_values(array_map('intval', array_filter($idSites, fn($idSite): bool => is_numeric($idSite))));
+        $validIdSites = array_values(array_map('intval', array_filter(
+            $idSites,
+            fn($idSite): bool => is_int($idSite) || (is_string($idSite) && ctype_digit($idSite))
+        )));
         $validPeriods = array_values(array_filter($periods, fn($period): bool => $period instanceof Period));
         if (
-            count($validIdSites) !== count($idSites)
+            !$isValidName
+            || count($validIdSites) !== count($idSites)
             || count($validPeriods) !== count($periods)
             || ($segment !== null && !$segment instanceof Segment)
         ) {
-            $logger->error('Archiving.markArchivesAsInvalidated.end was posted with websites, periods or a segment of another type.');
+            $logger->error('Archiving.markArchivesAsInvalidated.end was posted with websites, periods, a segment or a name of another type.');
         }
 
         try {
