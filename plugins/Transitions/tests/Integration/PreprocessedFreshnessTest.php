@@ -865,20 +865,22 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame(self::TODAY . ' 12:20:00', $refreshed['preprocessedAt']);
     }
 
-    public function testNoSegmentIsBuiltWhenSegmentsArentArchivedForTransitions(): void
+    public function testASegmentNoLongerArchivedForTransitionsIsAnsweredFromTheLogs(): void
     {
         $this->addPreProcessedSegment();
         $idPage = $this->selectPage(self::PAGE_URL);
         $this->trackPageviews(self::TODAY . ' 09:00:00', 1);
         $this->setNow(self::TODAY . ' 12:00:00');
         $this->archive($idPage, 'day', self::TODAY, self::SEGMENT);
-        $report = $this->request('day', self::TODAY, self::PAGE_URL, self::SEGMENT);
+        self::assertSame(1, $this->request('day', self::TODAY, self::PAGE_URL, self::SEGMENT)['preprocessed']);
 
         Config::getInstance()->General['disable_archiving_segment_for_plugins'] = 'Transitions';
         $this->trackPageviews(self::TODAY . ' 13:00:00', 2);
         $this->setNow(self::TODAY . ' 12:20:00');
 
-        self::assertSame($this->toArray($report), $this->toArray($this->request('day', self::TODAY, self::PAGE_URL, self::SEGMENT)));
+        $report = $this->request('day', self::TODAY, self::PAGE_URL, self::SEGMENT);
+        self::assertArrayNotHasKey('preprocessed', $report);
+        self::assertSame($this->getRawPageMetrics(self::TODAY, self::SEGMENT), $this->toArray($report)['pageMetrics']);
         self::assertSame(0, $this->countPartialArchives(self::TODAY));
     }
 

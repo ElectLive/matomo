@@ -40,8 +40,8 @@ use Piwik\Site;
  *   again, which deletes them (see {@link PartialArchives}). With browser archiving, the invalidations remembered for
  *   the days of the request, for example by the deletion of a data subject's visits, are applied first.
  *
- * Records are built as a partial archive of the page's records only, for all visits and pre-processed segments. At
- * most {@link MAX_SUMMED_PERIODS} periods are summed for a request.
+ * Records are served and built for all visits and pre-processed segments only, as a partial archive of the page's
+ * records. At most {@link MAX_SUMMED_PERIODS} periods are summed for a request.
  */
 final class StoredRecordsLoader
 {
@@ -101,6 +101,10 @@ final class StoredRecordsLoader
             return null;
         }
         $site = new Site($idSite);
+        // records of another segment may predate its last change, as nothing builds them
+        if (!$this->canBuildForSegment($site, $segment)) {
+            return null;
+        }
         $this->applyRememberedInvalidations($site, $periods);
 
         $records = $this->reader->readSum($idSite, $periods, $segment, $idPage, $tableParts);
@@ -123,13 +127,8 @@ final class StoredRecordsLoader
             return $records;
         }
 
-        $canBuild = $this->canBuildForSegment($site, $segment);
-        if ($records !== null && !$canBuild) {
-            return $records;
-        }
-
-        $mayRefresh = $canBuild && $this->getRefreshAfter($idSite) > 0;
-        $mayBuildDay = $mayBuildMissing && $canBuild && !$period instanceof Range && $period->getLabel() === 'day';
+        $mayRefresh = $this->getRefreshAfter($idSite) > 0;
+        $mayBuildDay = $mayBuildMissing && !$period instanceof Range && $period->getLabel() === 'day';
 
         $resolved = $this->resolve($site, $periods, $segment, $idPage, $mayRefresh, $mayBuildDay, $mayBuildMissing, false);
         if ($resolved === null) {
@@ -494,8 +493,8 @@ final class StoredRecordsLoader
     }
 
     /**
-     * Records are built for all visits and the segments that are pre-processed, unless segments aren't archived for
-     * the plugin.
+     * Records are served and built for all visits and the segments that are pre-processed, unless segments aren't
+     * archived for the plugin.
      */
     private function canBuildForSegment(Site $site, Segment $segment): bool
     {
