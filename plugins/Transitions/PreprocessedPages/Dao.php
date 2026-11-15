@@ -46,6 +46,25 @@ class Dao
     }
 
     /**
+     * @param list<int> $idSites
+     * @return list<int> the websites among them with pages, also removed ones
+     */
+    public function getSitesWithAnyPages(array $idSites): array
+    {
+        $result = [];
+        foreach (array_chunk(array_map('intval', $idSites), 1000) as $chunk) {
+            $rows = $this->readIfTableExists(fn() => Db::fetchAll(
+                'SELECT DISTINCT idsite FROM ' . $this->getTable() . ' WHERE idsite IN (' . implode(',', $chunk) . ')'
+            ), []);
+            foreach ($rows as $row) {
+                $result[] = (int) $row['idsite'];
+            }
+        }
+
+        return $result;
+    }
+
+    /**
      * @return PreprocessedPage|null null also for a removed page
      */
     public function getPage(int $idSite, int $idPage): ?array

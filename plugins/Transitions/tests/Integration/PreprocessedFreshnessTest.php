@@ -34,6 +34,7 @@ use Piwik\Plugins\SegmentEditor\API as SegmentEditorAPI;
 use Piwik\Plugins\Transitions\API;
 use Piwik\Plugins\Transitions\Model;
 use Piwik\Plugins\Transitions\PreprocessedPages\ArchivingMode;
+use Piwik\Plugins\Transitions\PreprocessedPages\PartialArchives;
 use Piwik\Plugins\Transitions\PreprocessedPages\Records;
 use Piwik\Plugins\Transitions\PreprocessedPages\Service;
 use Piwik\Plugins\Transitions\PreprocessedPages\StoredRecordsLoader;
@@ -353,31 +354,160 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame($month['pageMetrics'], $summed['pageMetrics']);
     }
 
-    public function testRecordsOfANewerPartialArchiveAreNotServedOnceTheFullArchiveIsInvalidated(): void
+    public function testTodayInvalidatedByCronArchivingIsBuiltOnceAndServedWithItsLongerPeriods(): void
+    {
+        $this->setBrowserArchiving(false);
+        $idPage = $this->selectPage(self::PAGE_URL);
+        $this->setNow(self::TODAY . ' 12:00:00');
+        $this->archive($idPage, 'year', self::TODAY);
+        $this->trackPageviews(self::TODAY . ' 13:00:00', 2);
+        $this->setNow(self::TODAY . ' 12:20:00');
+        $this->request('day', self::TODAY);
+        self::assertSame(1, $this->countPartialArchives(self::TODAY));
+
+        // core:archive invalidates today, and its week, month and year, before it archives them again
+        $this->setNow(self::TODAY . ' 12:25:00');
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::TODAY)], 'day');
+        self::assertSame(0, $this->countPartialArchives(self::TODAY));
+
+        // meanwhile, today is built once and served, also within its longer periods beyond the period limit
+        Config::setSetting('Transitions', 'max_period_allowed', 'day');
+        $this->setNow(self::TODAY . ' 12:30:00');
+        $day = $this->request('day', self::TODAY);
+        self::assertSame(1, $day['preprocessed']);
+        self::assertSame(self::TODAY . ' 12:30:00', $day['preprocessedAt']);
+        self::assertSame(1, $this->countPartialArchives(self::TODAY));
+
+        $this->setNow(self::TODAY . ' 12:35:00');
+        foreach (['day', 'week', 'month', 'year'] as $period) {
+            self::assertSame(1, $this->request($period, self::TODAY)['preprocessed'], $period);
+        }
+        self::assertSame($this->toArray($day), $this->toArray($this->request('day', self::TODAY)));
+        self::assertSame(1, $this->countPartialArchives(self::TODAY));
+    }
+
+    public function testWithoutCronAnInvalidatedDayIsBuiltOnceAgain(): void
     {
         // the day's archive for all plugins, built before the page was selected
-        $this->setBrowserArchiving(true);
-        Cache::getTransientCache()->flushAll();
-        Archive::build(1, 'day', self::DAY)->getNumeric('nb_visits');
-
-        // without cron, the request builds the page's day in a partial archive
+        $this->archiveAllPlugins(self::DAY);
         $this->selectPage(self::PAGE_URL);
         $built = $this->request('day', self::DAY);
         self::assertSame(1, $built['preprocessed']);
         self::assertSame(1, $this->countPartialArchives(self::DAY));
 
-        // as after the deletion of a data subject's visits: core invalidates the archive for all plugins, never the
-        // partial archive holding the page's records
         StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        self::assertSame(0, $this->countPartialArchives(self::DAY));
+
+        $this->setNow('2010-03-20 10:00:00');
+        $rebuilt = $this->request('day', self::DAY);
+        self::assertSame(1, $rebuilt['preprocessed']);
+        self::assertSame('2010-03-20 10:00:00', $rebuilt['preprocessedAt']);
+
+        $this->setNow('2010-03-20 11:00:00');
+        self::assertSame($this->toArray($rebuilt), $this->toArray($this->request('day', self::DAY)));
+        self::assertSame(1, $this->countPartialArchives(self::DAY));
+    }
+
+    public function testErasedVisitsAreNotServedFromAPartialArchiveWithCron(): void
+    {
+        $this->trackPageviews(self::DAY . ' 09:00:00', 2);
+        $this->archiveAllPlugins(self::DAY);
+        $this->selectPage(self::PAGE_URL);
+        $built = $this->request('day', self::DAY);
+        self::assertSame(1, $built['preprocessed']);
+
+        $this->setBrowserArchiving(false);
+        $this->deleteVisitOfPage(self::DAY);
+        self::assertSame(0, $this->countPartialArchives(self::DAY));
+
+        // until core:archive archives the day again, the logs answer it
+        $report = $this->request('day', self::DAY);
+        self::assertArrayNotHasKey('preprocessed', $report);
+        self::assertLessThan($built['pageMetrics']['pageviews'], $report['pageMetrics']['pageviews']);
+    }
+
+    public function testErasedVisitsOfASegmentAreNotServedAfterBrowserArchivingAppliedTheInvalidationForAllVisitsOnly(): void
+    {
+        $this->addPreProcessedSegment();
+        $this->trackPageviews(self::DAY . ' 09:00:00', 2);
+        $this->selectPage(self::PAGE_URL);
+        $built = $this->request('day', self::DAY, self::PAGE_URL, self::SEGMENT);
+        self::assertSame(1, $built['preprocessed']);
         self::assertSame(1, $this->countPartialArchives(self::DAY));
 
-        // with cron archiving nothing is built in the request, and the stored records aren't served until archived again
-        $this->setBrowserArchiving(false);
+        $this->deleteVisitOfPage(self::DAY);
+        // another report archives the day for all visits, which invalidates only those and forgets the date
+        $this->archiveAllPlugins(self::DAY);
+        self::assertArrayNotHasKey(self::DAY, StaticContainer::get(ArchiveInvalidator::class)->getRememberedArchivedReportsThatShouldBeInvalidated(1));
+
+        $rebuilt = $this->request('day', self::DAY, self::PAGE_URL, self::SEGMENT);
+        self::assertSame(1, $rebuilt['preprocessed']);
+        self::assertLessThan($built['pageMetrics']['pageviews'], $rebuilt['pageMetrics']['pageviews']);
+        self::assertSame($this->getRawPageMetrics(self::DAY, self::SEGMENT), $this->toArray($rebuilt)['pageMetrics']);
+    }
+
+    public function testErasedVisitsAreNotServedFromAPartialArchiveOfASegment(): void
+    {
+        $this->addPreProcessedSegment();
+        $idPage = $this->selectPage(self::PAGE_URL);
+        $this->setNow(self::TODAY . ' 12:00:00');
+        $this->archive($idPage, 'day', self::TODAY, self::SEGMENT);
+        $this->trackPageviews(self::TODAY . ' 13:00:00', 2);
+        $this->setNow(self::TODAY . ' 12:20:00');
+        $refreshed = $this->request('day', self::TODAY, self::PAGE_URL, self::SEGMENT);
+        self::assertSame(self::TODAY . ' 12:20:00', $refreshed['preprocessedAt']);
+        self::assertSame(1, $this->countPartialArchives(self::TODAY));
+
+        $this->deleteVisitOfPage(self::TODAY);
+        self::assertSame(0, $this->countPartialArchives(self::TODAY));
+
+        $this->setNow(self::TODAY . ' 12:21:00');
+        $rebuilt = $this->request('day', self::TODAY, self::PAGE_URL, self::SEGMENT);
+        self::assertSame(1, $rebuilt['preprocessed']);
+        self::assertLessThan($refreshed['pageMetrics']['pageviews'], $rebuilt['pageMetrics']['pageviews']);
+        self::assertSame($this->getRawPageMetrics(self::TODAY, self::SEGMENT), $this->toArray($rebuilt)['pageMetrics']);
+    }
+
+    public function testADayBuildDuringAnInvalidationOfTheDayIsNotKept(): void
+    {
         $raw = $this->request('day', self::DAY);
-        self::assertArrayNotHasKey('preprocessed', $raw);
-        unset($built['preprocessed'], $built['preprocessedAt']);
-        self::assertSame($this->toArray($built), $this->toArray($raw));
-        self::assertArrayNotHasKey('preprocessed', $this->request('month', self::DAY));
+        $this->selectPage(self::PAGE_URL);
+
+        // the day is invalidated while its records are built
+        EventDispatcher::getInstance()->addObserver('ArchiveProcessor.shouldAggregateFromRawData', function () {
+            StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        });
+
+        self::assertSame($this->toArray($raw), $this->toArray($this->request('day', self::DAY)));
+        self::assertSame(0, $this->countPartialArchives(self::DAY));
+        self::assertSame(0, (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_blob_2010_03') . ' WHERE idsite = 1 AND period = 1 AND date1 = ?',
+            [self::DAY]
+        ));
+    }
+
+    public function testABuildDeletesTheOlderRecordsOfThePageOnly(): void
+    {
+        $idPage = $this->selectPage(self::PAGE_URL);
+        $otherIdPage = $this->selectPage(self::OTHER_PAGE_URL);
+        $this->setNow(self::TODAY . ' 12:00:00');
+        $this->archive($idPage, 'day', self::TODAY);
+        $this->trackPageviews(self::TODAY . ' 13:00:00', 1);
+        $this->trackPageviews(self::TODAY . ' 13:00:00', 1, self::OTHER_PAGE_URL);
+
+        $this->setNow(self::TODAY . ' 12:20:00');
+        $this->request('day', self::TODAY);
+        $this->request('day', self::TODAY, self::OTHER_PAGE_URL);
+        self::assertSame(2, $this->countPartialArchives(self::TODAY));
+
+        $this->trackPageviews(self::TODAY . ' 13:00:00', 1);
+        $this->setNow(self::TODAY . ' 12:40:00');
+        $report = $this->request('day', self::TODAY);
+        self::assertSame(self::TODAY . ' 12:40:00', $report['preprocessedAt']);
+
+        self::assertSame(2, $this->countPartialArchives(self::TODAY));
+        $names = $this->getPartialArchiveRecordNames(self::TODAY);
+        self::assertContains(Records::getRecordName($otherIdPage, Records::PAGEVIEWS), $names);
     }
 
     public function testDeletingAVisitIsReflectedInADayBuiltWithoutCron(): void
@@ -727,6 +857,47 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         }
     }
 
+    /**
+     * Archives the day for all plugins as browser archiving does, for example for another report.
+     */
+    private function archiveAllPlugins(string $date): void
+    {
+        $general = Config::getInstance()->General;
+        $this->setBrowserArchiving(true);
+        Cache::getTransientCache()->flushAll();
+
+        try {
+            Archive::build(1, 'day', $date)->getNumeric('nb_visits');
+        } finally {
+            Config::getInstance()->General = $general;
+            Cache::getTransientCache()->flushAll();
+        }
+    }
+
+    /**
+     * @return array<string, mixed> the page metrics of the logs: a limit above the stored rows asks them
+     */
+    private function getRawPageMetrics(string $date, string $segment = ''): array
+    {
+        return $this->toArray($this->request('day', $date, self::PAGE_URL, $segment, Records::getMaxRowsServed(1) + 1))['pageMetrics'];
+    }
+
+    /**
+     * Deletes a direct entry's visit to the page on the day, as a data subject's; it is in {@link SEGMENT}.
+     */
+    private function deleteVisitOfPage(string $date): void
+    {
+        $idVisit = Db::fetchOne(
+            'SELECT a.idvisit FROM ' . Common::prefixTable('log_link_visit_action') . ' a JOIN ' . Common::prefixTable('log_visit') . ' v ON v.idvisit = a.idvisit'
+            . ' WHERE a.idsite = 1 AND a.server_time >= ? AND a.server_time <= ? AND v.referer_type = ?'
+            . ' AND a.idaction_url = (SELECT idaction FROM ' . Common::prefixTable('log_action') . ' WHERE name = ? AND type = 1)'
+            . ' ORDER BY a.idvisit DESC LIMIT 1',
+            [$date . ' 00:00:00', $date . ' 23:59:59', Common::REFERRER_TYPE_DIRECT_ENTRY, 'example.org/page/one.html']
+        );
+        self::assertNotFalse($idVisit);
+        PrivacyManagerAPI::getInstance()->deleteDataSubjects([['idsite' => 1, 'idvisit' => $idVisit]]);
+    }
+
     private function setBrowserArchiving(bool $enabled): void
     {
         Config::getInstance()->General['enable_browser_archiving_triggering'] = (int) $enabled;
@@ -821,6 +992,7 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         StaticContainer::getContainer()->set(StoredRecordsLoader::class, new StoredRecordsLoader(
             StaticContainer::get(StoredRecordsReader::class),
             StaticContainer::get(Service::class),
+            StaticContainer::get(PartialArchives::class),
             $lockBackend ?? StaticContainer::get(LockBackend::class),
             StaticContainer::get(LoggerInterface::class),
             $maxLockWaitMilliseconds,

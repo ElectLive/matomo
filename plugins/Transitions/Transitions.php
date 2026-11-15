@@ -12,9 +12,12 @@ namespace Piwik\Plugins\Transitions;
 use Piwik\Common;
 use Piwik\Config;
 use Piwik\Container\StaticContainer;
+use Piwik\Date;
 use Piwik\Piwik;
 use Piwik\Plugins\Transitions\PreprocessedPages\ArchivingMode;
 use Piwik\Plugins\Transitions\PreprocessedPages\Dao as PreprocessedPagesDao;
+use Piwik\Plugins\Transitions\PreprocessedPages\PartialArchives;
+use Piwik\Segment;
 
 class Transitions extends \Piwik\Plugin
 {
@@ -32,6 +35,8 @@ class Transitions extends \Piwik\Plugin
             'UsersManager.deleteUser'                => 'anonymizePreprocessedPagesCreatedBy',
             'SitesManager.deleteSite.end'            => 'deletePreprocessedPagesForSite',
             'CronArchive.archiveSingleSite.finish'   => 'rememberCronArchiving',
+            // after other plugins added websites to invalidate
+            'Archiving.getIdSitesToMarkArchivesAsInvalidated' => ['function' => 'deletePartialArchivesOfInvalidatedPeriods', 'after' => true],
         );
     }
 
@@ -61,6 +66,31 @@ class Transitions extends \Piwik\Plugin
     public function rememberCronArchiving($idSite): void
     {
         ArchivingMode::rememberCronArchiving((int) $idSite);
+    }
+
+    /**
+     * Core doesn't invalidate partial archives, so the pre-processed pages' records built before an invalidation, for
+     * example of the visits of a deleted data subject, are deleted. Invalidations of another plugin's reports, or of
+     * single reports, leave them.
+     *
+     * @param array<int|string> $idSites
+     * @param array<Date|string> $dates
+     * @param string|false|null $period
+     * @param Segment|null $segment
+     * @param string|null $name
+     */
+    public function deletePartialArchivesOfInvalidatedPeriods(&$idSites, $dates, $period, $segment, $name): void
+    {
+        if (!empty($name) && $name !== 'Transitions') {
+            return;
+        }
+
+        StaticContainer::get(PartialArchives::class)->deleteForInvalidation(
+            (array) $idSites,
+            (array) $dates,
+            $period,
+            $segment instanceof Segment ? $segment : null
+        );
     }
 
     public function getPagesComparisonsDisabledFor(&$pages)

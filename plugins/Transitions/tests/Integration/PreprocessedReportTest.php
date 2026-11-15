@@ -30,6 +30,7 @@ use Piwik\Plugins\PrivacyManager\ReportsPurger;
 use Piwik\Plugins\SitesManager\API as SitesManagerAPI;
 use Piwik\Plugins\Transitions\API;
 use Piwik\Plugins\Transitions\PreprocessedPages\Dao;
+use Piwik\Plugins\Transitions\PreprocessedPages\PartialArchives;
 use Piwik\Plugins\Transitions\PreprocessedPages\Records;
 use Piwik\Plugins\Transitions\PreprocessedPages\Service;
 use Piwik\Plugins\Transitions\PreprocessedPages\StoredRecordsLoader;
@@ -688,6 +689,7 @@ class PreprocessedReportTest extends IntegrationTestCase
         StaticContainer::getContainer()->set(StoredRecordsLoader::class, new StoredRecordsLoader(
             StaticContainer::get(StoredRecordsReader::class),
             StaticContainer::get(Service::class),
+            StaticContainer::get(PartialArchives::class),
             StaticContainer::get(LockBackend::class),
             StaticContainer::get(LoggerInterface::class),
             200,

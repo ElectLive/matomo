@@ -19,14 +19,9 @@ use Piwik\Concurrency\Lock;
 use Piwik\Concurrency\LockBackend;
 use Piwik\Config\GeneralConfig;
 use Piwik\Container\StaticContainer;
-use Piwik\DataAccess\ArchiveTableCreator;
-use Piwik\DataAccess\ArchiveWriter;
-use Piwik\DataAccess\Model;
 use Piwik\Date;
-use Piwik\Db;
 use Piwik\Log\LoggerInterface;
 use Piwik\Period;
-use Piwik\Period\Day;
 use Piwik\Period\Range;
 use Piwik\Plugins\Transitions\RecordBuilders\PageTransitions;
 use Piwik\Segment;
@@ -41,8 +36,9 @@ use Piwik\Site;
  * - Without cron archiving, a requested single day without records is built for a selected page, and a longer period
  *   without records is summed from the stored records of its subperiods, down to days. Nothing else is built.
  * - Records read from an invalidated archive are never used: a longer period is summed from its subperiods instead,
- *   and a day is built where one of the above allows it. With browser archiving, the invalidations remembered for the
- *   days of the request, for example by the deletion of a data subject's visits, are applied first.
+ *   and a day is built where one of the above allows it; the records built then are used until the day is invalidated
+ *   again, which deletes them (see {@link PartialArchives}). With browser archiving, the invalidations remembered for
+ *   the days of the request, for example by the deletion of a data subject's visits, are applied first.
  *
  * Records are built as a partial archive of the page's records only, for all visits and pre-processed segments. At
  * most {@link MAX_SUMMED_PERIODS} periods are summed for a request.
@@ -83,6 +79,7 @@ final class StoredRecordsLoader
     public function __construct(
         private readonly StoredRecordsReader $reader,
         private readonly Service $service,
+        private readonly PartialArchives $partialArchives,
         private readonly LockBackend $lockBackend,
         private readonly LoggerInterface $logger,
         private readonly int $maxLockWaitMilliseconds = 10000,
@@ -143,7 +140,8 @@ final class StoredRecordsLoader
     }
 
     /**
-     * Returns periods whose stored records cover the given ones, as fresh as allowed, building day records on the way.
+     * Returns periods whose stored records cover the given ones, as fresh as allowed, building day records on the way;
+     * an invalidated day is covered once it is built again.
      * The subperiods of all periods of one level are looked at together, the longest stored periods first.
      *
      * @param list<Period> $periods
@@ -294,8 +292,8 @@ final class StoredRecordsLoader
     /**
      * Applies the invalidations remembered for the days of the periods, for example after a data subject's visits were
      * deleted, as browser archiving does before it reads archives. They are applied for all segments, as `core:archive`
-     * does, so they are forgotten afterwards. Core doesn't invalidate partial archives, so the Transitions day records
-     * built from the previous data are deleted, and are built again where allowed.
+     * does, so they are forgotten afterwards. Applying them deletes the Transitions records built in partial archives
+     * from the previous data, see {@link PartialArchives}, which are built again where allowed.
      *
      * @param list<Period> $periods
      */
@@ -326,26 +324,6 @@ final class StoredRecordsLoader
             $invalidator->markArchivesAsInvalidated([$idSite], array_values($dates), false);
         } finally {
             Site::clearCache();
-        }
-
-        foreach ($dates as $date) {
-            $numericTable = ArchiveTableCreator::getNumericTable($date, false);
-            if (empty($numericTable)) {
-                continue;
-            }
-
-            $idArchives = Db::fetchAll(
-                'SELECT idarchive FROM ' . $numericTable . ' WHERE idsite = ? AND period = ' . Day::PERIOD_ID
-                . " AND date1 = ? AND name LIKE 'done%.Transitions' AND value = " . ArchiveWriter::DONE_PARTIAL,
-                [$idSite, $date->toString()]
-            );
-            if (!empty($idArchives)) {
-                StaticContainer::get(Model::class)->deleteArchiveIds(
-                    $numericTable,
-                    ArchiveTableCreator::getBlobTable($date, false) ?: null,
-                    array_column($idArchives, 'idarchive')
-                );
-            }
         }
     }
 
@@ -400,10 +378,12 @@ final class StoredRecordsLoader
 
     /**
      * Builds the page's day records unless another request does or did meanwhile. A request waits for another one
-     * building the same records, and uses the stored records if that takes too long.
+     * building the same records, and uses the stored records if that takes too long. Records built while the day was
+     * invalidated, maybe from the logs before the change, are deleted. Older records of the page built alone are
+     * deleted once the new ones are written.
      *
      * @param bool $isRefresh whether existing records are rebuilt, else missing ones are built
-     * @return bool whether the records exist now
+     * @return bool whether the records exist now, or, for a refresh, whether stored records may be served
      */
     private function buildDay(Site $site, Period $day, Segment $segment, int $idPage, bool $isRefresh): bool
     {
@@ -441,8 +421,18 @@ final class StoredRecordsLoader
             }
             $cache->save($attemptId, 1, max(self::MIN_RETRY_AFTER_SECONDS, $this->getRefreshAfter($idSite)));
 
-            $this->archiveDay($site, $day, $segment, $idPage, $timeLimit, fn() => $lock->extendLock($lockTtl));
+            $dayString = $day->getDateStart()->toString();
+            $invalidationMarker = $this->partialArchives->getInvalidationMarker($idSite, $dayString);
+            $idArchive = $this->archiveDay($site, $day, $segment, $idPage, $timeLimit, fn() => $lock->extendLock($lockTtl));
             $cache->delete($attemptId);
+
+            if ($this->partialArchives->getInvalidationMarker($idSite, $dayString) !== $invalidationMarker) {
+                $this->partialArchives->deleteArchives($day, [$idArchive]);
+
+                return $isRefresh;
+            }
+
+            $this->partialArchives->deleteOlderPartialArchivesOfPage($idSite, $day, $segment, $idPage, $idArchive);
         } catch (\Throwable $e) {
             // the stored records, if any, are served as they are
             $this->logger->warning('Could not build the pre-processed Transitions records of a page: {exception}', ['exception' => $e]);
@@ -459,8 +449,9 @@ final class StoredRecordsLoader
      * Writes a partial archive with the page's day records, built from the logs.
      *
      * @param callable(): mixed $extendLock called before each step after the first
+     * @return int the idarchive
      */
-    private function archiveDay(Site $site, Period $day, Segment $segment, int $idPage, float $timeLimit, callable $extendLock): void
+    private function archiveDay(Site $site, Period $day, Segment $segment, int $idPage, float $timeLimit, callable $extendLock): int
     {
         $idSite = (int) $site->getId();
         $daySegment = new Segment(
@@ -474,15 +465,18 @@ final class StoredRecordsLoader
         $params->setRequestedPlugin('Transitions');
         $params->setArchiveOnlyReport(Records::getRebuildReportName($idPage));
 
-        PageTransitions::executeWithTimeLimit($timeLimit, function () use ($params, $timeLimit, $extendLock): void {
+        $idArchive = 0;
+        PageTransitions::executeWithTimeLimit($timeLimit, function () use ($params, $timeLimit, $extendLock, &$idArchive): void {
             $archiver = new TimeLimitedPluginsArchiver($params, $timeLimit);
             $metrics = $archiver->callAggregateCoreMetrics();
             $extendLock();
             // a day without visits gets records too, so it counts as covered
             $archiver->callAggregateAllPlugins($metrics['nb_visits'], $metrics['nb_visits_converted'], true);
             $extendLock();
-            $archiver->finalizeArchive();
+            $idArchive = (int) $archiver->finalizeArchive();
         });
+
+        return $idArchive;
     }
 
     private function acquireLock(Lock $lock, string $lockId, int $ttl): bool
