@@ -137,7 +137,8 @@ final class PartialArchives
     }
 
     /**
-     * Changes whenever days of the website are invalidated.
+     * Changes whenever core applies an invalidation of days of the website for all plugins or for Transitions, if
+     * the website has pages, also removed ones.
      */
     public function getInvalidationMarker(int $idSite): ?string
     {

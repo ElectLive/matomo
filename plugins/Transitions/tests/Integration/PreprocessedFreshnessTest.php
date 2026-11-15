@@ -656,6 +656,33 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, self::DAY, ''));
     }
 
+    public function testAnInvalidationLeavesThePartialArchivesInProgress(): void
+    {
+        $this->selectPage(self::PAGE_URL);
+        $this->insertPartialArchive(1, Day::PERIOD_ID, self::DAY, self::DAY, '', ArchiveWriter::DONE_ERROR);
+        $this->insertPartialArchive(1, Day::PERIOD_ID, self::DAY, self::DAY, '', ArchiveWriter::DONE_ERROR_INVALIDATED);
+
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+
+        self::assertSame(0, (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' WHERE name = ?',
+            [Records::INVALIDATED]
+        ));
+    }
+
+    public function testTheInvalidationMarkersOfWebsitesDeletedMeanwhileAreForgotten(): void
+    {
+        $this->selectPage(self::PAGE_URL);
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        Option::set('Transitions.invalidated_99', 'deleted website');
+
+        $partialArchives = StaticContainer::get(PartialArchives::class);
+        $partialArchives->forgetDeletedSites();
+
+        self::assertNotNull($partialArchives->getInvalidationMarker(1));
+        self::assertNull($partialArchives->getInvalidationMarker(99));
+    }
+
     public function testArgumentsOfOtherTypesAreLoggedAndASegmentOfAnotherTypeStandsForAllSegments(): void
     {
         $this->selectPage(self::PAGE_URL);
@@ -1205,13 +1232,13 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         );
     }
 
-    private function insertPartialArchive(int $idSite, int $periodId, string $date1, string $date2, string $segment): void
+    private function insertPartialArchive(int $idSite, int $periodId, string $date1, string $date2, string $segment, int $value = ArchiveWriter::DONE_PARTIAL): void
     {
         $table = ArchiveTableCreator::getNumericTable(Date::factory($date1), true);
         $idArchive = (int) Db::fetchOne('SELECT COALESCE(MAX(idarchive), 0) + 1 FROM ' . $table);
         Db::query(
             'INSERT INTO ' . $table . ' (idarchive, idsite, date1, date2, period, ts_archived, name, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [$idArchive, $idSite, $date1, $date2, $periodId, '2010-03-21 00:00:00', $this->getPartialDoneFlag($idSite, $segment), ArchiveWriter::DONE_PARTIAL]
+            [$idArchive, $idSite, $date1, $date2, $periodId, '2010-03-21 00:00:00', $this->getPartialDoneFlag($idSite, $segment), $value]
         );
     }
 
