@@ -29,10 +29,10 @@ use Piwik\Segment;
  * The partial archives holding pre-processed Transitions records, `done<segment hash>.Transitions`: written by the
  * rebuild of an added page and by builds within report requests.
  *
- * Core doesn't invalidate partial archives, so they are deleted when core invalidates the periods they hold, once it
- * applies the invalidation: for example the deletion of a data subject's visits only when the day is archived again.
- * Until then they are served like core's own archives, and if core never applies it, as the logs of the day were
- * deleted meanwhile, they stay like core's own archives.
+ * Core doesn't invalidate partial archives, so they are deleted when core invalidates the periods they hold. An
+ * invalidation core only remembers, like that of a data subject's deleted visits, deletes them once core applies it.
+ * Until then they are served like core's own archives, and they stay like those if core skips it, as the logs of the
+ * day were deleted meanwhile.
  */
 final class PartialArchives
 {
