@@ -37,7 +37,7 @@ use Piwik\Site;
  *
  * A period whose records are read from an invalidated archive is not covered, as its data has changed since, for
  * example by the deletion of a data subject's visits. Records of a newer partial archive are, as partial archives
- * built before an invalidation are deleted with it, see {@link PartialArchives}.
+ * built before an invalidation are deleted when core applies it, see {@link PartialArchives}.
  */
 final class StoredRecordsReader
 {

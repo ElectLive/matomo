@@ -421,12 +421,11 @@ final class StoredRecordsLoader
             }
             $cache->save($attemptId, 1, max(self::MIN_RETRY_AFTER_SECONDS, $this->getRefreshAfter($idSite)));
 
-            $dayString = $day->getDateStart()->toString();
-            $invalidationMarker = $this->partialArchives->getInvalidationMarker($idSite, $dayString);
+            $invalidationMarker = $this->partialArchives->getInvalidationMarker($idSite);
             $idArchive = $this->archiveDay($site, $day, $segment, $idPage, $timeLimit, fn() => $lock->extendLock($lockTtl));
             $cache->delete($attemptId);
 
-            if ($this->partialArchives->getInvalidationMarker($idSite, $dayString) !== $invalidationMarker) {
+            if ($this->partialArchives->getInvalidationMarker($idSite) !== $invalidationMarker) {
                 $this->partialArchives->deleteArchives($day, [$idArchive]);
 
                 return $isRefresh;

@@ -12,7 +12,7 @@ namespace Piwik\Plugins\Transitions;
 use Piwik\Common;
 use Piwik\Config;
 use Piwik\Container\StaticContainer;
-use Piwik\Date;
+use Piwik\Log\LoggerInterface;
 use Piwik\Piwik;
 use Piwik\Plugins\Transitions\PreprocessedPages\ArchivingMode;
 use Piwik\Plugins\Transitions\PreprocessedPages\Dao as PreprocessedPagesDao;
@@ -35,8 +35,7 @@ class Transitions extends \Piwik\Plugin
             'UsersManager.deleteUser'                => 'anonymizePreprocessedPagesCreatedBy',
             'SitesManager.deleteSite.end'            => 'deletePreprocessedPagesForSite',
             'CronArchive.archiveSingleSite.finish'   => 'rememberCronArchiving',
-            // after other plugins added websites to invalidate
-            'Archiving.getIdSitesToMarkArchivesAsInvalidated' => ['function' => 'deletePartialArchivesOfInvalidatedPeriods', 'after' => true],
+            'Archiving.markArchivesAsInvalidated.end' => 'deletePartialArchivesOfInvalidatedPeriods',
         );
     }
 
@@ -47,6 +46,7 @@ class Transitions extends \Piwik\Plugin
     {
         StaticContainer::get(PreprocessedPagesDao::class)->cleanUpDeletedUsersAndSites();
         ArchivingMode::forgetDeletedSites();
+        StaticContainer::get(PartialArchives::class)->forgetDeletedSites();
     }
 
     public function anonymizePreprocessedPagesCreatedBy(string $userLogin): void
@@ -58,6 +58,7 @@ class Transitions extends \Piwik\Plugin
     {
         StaticContainer::get(PreprocessedPagesDao::class)->deletePagesForSite($idSite);
         ArchivingMode::forgetSite($idSite);
+        StaticContainer::get(PartialArchives::class)->forgetSite($idSite);
     }
 
     /**
@@ -70,27 +71,32 @@ class Transitions extends \Piwik\Plugin
 
     /**
      * Core doesn't invalidate partial archives, so the pre-processed pages' records built before an invalidation, for
-     * example of the visits of a deleted data subject, are deleted. Invalidations of another plugin's reports, or of
-     * single reports, leave them.
+     * example of the visits of a deleted data subject, are deleted once core applies it. Invalidations of another
+     * plugin's reports, or of single reports, leave them. A failure doesn't stop core's invalidation.
      *
      * @param array<int|string> $idSites
-     * @param array<Date|string> $dates
-     * @param string|false|null $period
+     * @param array<mixed> $periods
      * @param Segment|null $segment
      * @param string|null $name
      */
-    public function deletePartialArchivesOfInvalidatedPeriods(&$idSites, $dates, $period, $segment, $name): void
+    public function deletePartialArchivesOfInvalidatedPeriods($idSites, $periods, $segment, $name): void
     {
         if (!empty($name) && $name !== 'Transitions') {
             return;
         }
 
-        StaticContainer::get(PartialArchives::class)->deleteForInvalidation(
-            (array) $idSites,
-            (array) $dates,
-            $period,
-            $segment instanceof Segment ? $segment : null
-        );
+        try {
+            StaticContainer::get(PartialArchives::class)->deleteForInvalidation(
+                (array) $idSites,
+                (array) $periods,
+                $segment instanceof Segment ? $segment : null
+            );
+        } catch (\Throwable $e) {
+            StaticContainer::get(LoggerInterface::class)->error(
+                'Could not delete the pre-processed Transitions records of invalidated periods: {exception}',
+                ['exception' => $e]
+            );
+        }
     }
 
     public function getPagesComparisonsDisabledFor(&$pages)

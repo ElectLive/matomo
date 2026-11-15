@@ -13,14 +13,18 @@ namespace Piwik\Plugins\Transitions\tests\Integration;
 
 use Piwik\Archive;
 use Piwik\Archive\ArchiveInvalidator;
+use Piwik\ArchiveProcessor\Rules;
 use Piwik\Cache;
 use Piwik\Common;
 use Piwik\Concurrency\Lock;
 use Piwik\Concurrency\LockBackend;
 use Piwik\Config;
 use Piwik\Container\StaticContainer;
+use Piwik\CronArchive;
+use Piwik\DataAccess\ArchiveTableCreator;
 use Piwik\DataAccess\ArchiveWriter;
 use Piwik\DataAccess\LogAggregator;
+use Piwik\DataAccess\Model as DataAccessModel;
 use Piwik\Date;
 use Piwik\Db;
 use Piwik\EventDispatcher;
@@ -28,12 +32,17 @@ use Piwik\Log\LoggerInterface;
 use Piwik\Metrics;
 use Piwik\Option;
 use Piwik\Period\Day;
+use Piwik\Period\Month;
+use Piwik\Period\Week;
+use Piwik\Period\Year;
 use Piwik\Plugins\Live\Exception\MaxExecutionTimeExceededException;
 use Piwik\Plugins\PrivacyManager\API as PrivacyManagerAPI;
+use Piwik\Plugins\PrivacyManager\PrivacyManager;
 use Piwik\Plugins\SegmentEditor\API as SegmentEditorAPI;
 use Piwik\Plugins\Transitions\API;
 use Piwik\Plugins\Transitions\Model;
 use Piwik\Plugins\Transitions\PreprocessedPages\ArchivingMode;
+use Piwik\Plugins\Transitions\PreprocessedPages\Dao as PreprocessedPagesDao;
 use Piwik\Plugins\Transitions\PreprocessedPages\PartialArchives;
 use Piwik\Plugins\Transitions\PreprocessedPages\Records;
 use Piwik\Plugins\Transitions\PreprocessedPages\Service;
@@ -408,7 +417,7 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame(1, $this->countPartialArchives(self::DAY));
     }
 
-    public function testErasedVisitsAreNotServedFromAPartialArchiveWithCron(): void
+    public function testErasedVisitsAreNotServedFromAPartialArchiveOnceCronArchivingAppliedTheErasure(): void
     {
         $this->trackPageviews(self::DAY . ' 09:00:00', 2);
         $this->archiveAllPlugins(self::DAY);
@@ -416,27 +425,64 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         $built = $this->request('day', self::DAY);
         self::assertSame(1, $built['preprocessed']);
 
+        // until core:archive applies the erasure, the archives of the day are served, as for every report
         $this->setBrowserArchiving(false);
         $this->deleteVisitOfPage(self::DAY);
-        self::assertSame(0, $this->countPartialArchives(self::DAY));
+        self::assertSame(1, $this->countPartialArchives(self::DAY));
+        self::assertSame($this->toArray($built), $this->toArray($this->request('day', self::DAY)));
 
-        // until core:archive archives the day again, the logs answer it
+        // then the logs answer the day until core:archive archives it again; it skips an archive just built
+        Date::$now = time() + 3600;
+        $this->applyRememberedInvalidationsAsCronArchiving();
+        self::assertSame(0, $this->countPartialArchives(self::DAY));
         $report = $this->request('day', self::DAY);
         self::assertArrayNotHasKey('preprocessed', $report);
         self::assertLessThan($built['pageMetrics']['pageviews'], $report['pageMetrics']['pageviews']);
     }
 
-    public function testErasedVisitsOfASegmentAreNotServedAfterBrowserArchivingAppliedTheInvalidationForAllVisitsOnly(): void
+    /**
+     * @dataProvider getArchivingModes
+     */
+    public function testAnErasureCoreDropsAsTheLogsOfTheDayWereDeletedMeanwhileKeepsThePartialArchive(bool $withBrowserArchiving): void
+    {
+        $this->trackPageviews(self::DAY . ' 09:00:00', 2);
+        $this->selectPage(self::PAGE_URL);
+        $built = $this->request('day', self::DAY);
+        self::assertSame(1, $built['preprocessed']);
+
+        $this->deleteVisitOfPage(self::DAY);
+        // the logs of the day are deleted before the erasure is applied, which core then skips for its archives too
+        $this->setNow('2010-03-20 00:30:00');
+        PrivacyManager::savePurgeDataSettings(['delete_logs_enable' => 1, 'delete_logs_older_than' => 10]);
+        $this->setBrowserArchiving($withBrowserArchiving);
+        if (!$withBrowserArchiving) {
+            $this->applyRememberedInvalidationsAsCronArchiving();
+        }
+
+        self::assertSame($this->toArray($built), $this->toArray($this->request('day', self::DAY)));
+        self::assertSame(1, $this->countPartialArchives(self::DAY));
+    }
+
+    /**
+     * @dataProvider getSegmentArchiveKinds
+     */
+    public function testErasedVisitsOfASegmentAreNotServedAfterABrowserRequestForAllVisitsAppliedTheErasure(bool $isPartial): void
     {
         $this->addPreProcessedSegment();
         $this->trackPageviews(self::DAY . ' 09:00:00', 2);
-        $this->selectPage(self::PAGE_URL);
+        $idPage = $this->selectPage(self::PAGE_URL);
+        if (!$isPartial) {
+            // the segment's archive for all plugins, as core:archive builds it
+            $this->setNow(self::TODAY . ' 12:00:00');
+            $this->archive($idPage, 'day', self::DAY, self::SEGMENT);
+            Date::$now = null;
+        }
         $built = $this->request('day', self::DAY, self::PAGE_URL, self::SEGMENT);
         self::assertSame(1, $built['preprocessed']);
-        self::assertSame(1, $this->countPartialArchives(self::DAY));
+        self::assertSame($isPartial ? 1 : 0, $this->countPartialArchives(self::DAY));
 
         $this->deleteVisitOfPage(self::DAY);
-        // another report archives the day for all visits, which invalidates only those and forgets the date
+        // another report archives the day for all visits, which applies the erasure and forgets the date
         $this->archiveAllPlugins(self::DAY);
         self::assertArrayNotHasKey(self::DAY, StaticContainer::get(ArchiveInvalidator::class)->getRememberedArchivedReportsThatShouldBeInvalidated(1));
 
@@ -444,6 +490,15 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame(1, $rebuilt['preprocessed']);
         self::assertLessThan($built['pageMetrics']['pageviews'], $rebuilt['pageMetrics']['pageviews']);
         self::assertSame($this->getRawPageMetrics(self::DAY, self::SEGMENT), $this->toArray($rebuilt)['pageMetrics']);
+    }
+
+    /**
+     * @return iterable<string, array{bool}>
+     */
+    public function getSegmentArchiveKinds(): iterable
+    {
+        yield 'partial archive built in a request' => [true];
+        yield 'archive for all plugins' => [false];
     }
 
     public function testErasedVisitsAreNotServedFromAPartialArchiveOfASegment(): void
@@ -458,14 +513,117 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame(self::TODAY . ' 12:20:00', $refreshed['preprocessedAt']);
         self::assertSame(1, $this->countPartialArchives(self::TODAY));
 
+        // the request applies the erasure first, which deletes the partial archive
         $this->deleteVisitOfPage(self::TODAY);
-        self::assertSame(0, $this->countPartialArchives(self::TODAY));
+        self::assertSame(1, $this->countPartialArchives(self::TODAY));
 
         $this->setNow(self::TODAY . ' 12:21:00');
         $rebuilt = $this->request('day', self::TODAY, self::PAGE_URL, self::SEGMENT);
         self::assertSame(1, $rebuilt['preprocessed']);
         self::assertLessThan($refreshed['pageMetrics']['pageviews'], $rebuilt['pageMetrics']['pageviews']);
         self::assertSame($this->getRawPageMetrics(self::TODAY, self::SEGMENT), $this->toArray($rebuilt)['pageMetrics']);
+    }
+
+    /**
+     * @dataProvider getInvalidations
+     * @param array<mixed> $arguments the arguments of markArchivesAsInvalidated() after the websites; a segment as string
+     * @param list<string> $kept
+     */
+    public function testAnInvalidationDeletesThePartialArchivesOfThePeriodsCoreInvalidatesOnly(array $arguments, bool $withDeletedLogs, array $kept): void
+    {
+        $this->selectPage(self::PAGE_URL);
+        Fixture::createWebsite('2010-01-01 00:00:00');
+        $partialArchives = [
+            'day' => [1, Day::PERIOD_ID, self::DAY, self::DAY, ''],
+            'other day' => [1, Day::PERIOD_ID, '2010-03-20', '2010-03-20', ''],
+            'week' => [1, Week::PERIOD_ID, '2010-03-01', '2010-03-07', ''],
+            'month' => [1, Month::PERIOD_ID, '2010-03-01', '2010-03-31', ''],
+            'year' => [1, Year::PERIOD_ID, '2010-01-01', '2010-12-31', ''],
+            'day of the segment' => [1, Day::PERIOD_ID, self::DAY, self::DAY, self::SEGMENT],
+            'day of a website without pages' => [2, Day::PERIOD_ID, self::DAY, self::DAY, ''],
+        ];
+        foreach ($partialArchives as $partialArchive) {
+            $this->insertPartialArchive(...$partialArchive);
+        }
+
+        $this->setNow('2010-03-20 12:00:00');
+        if ($withDeletedLogs) {
+            PrivacyManager::savePurgeDataSettings(['delete_logs_enable' => 1, 'delete_logs_older_than' => 10]);
+        }
+        $arguments[2] = isset($arguments[2]) ? new Segment($arguments[2], [1, 2]) : null;
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1, 2], ...$arguments);
+
+        $remaining = [];
+        foreach ($partialArchives as $label => [$idSite, $periodId, $date1, , $segment]) {
+            if ($this->countPartialArchivesOf($idSite, $periodId, $date1, $segment) > 0) {
+                $remaining[] = $label;
+            }
+        }
+        self::assertSame($kept, $remaining);
+    }
+
+    /**
+     * @return iterable<string, array{array<mixed>, bool, list<string>}>
+     */
+    public function getInvalidations(): iterable
+    {
+        $all = ['day', 'other day', 'week', 'month', 'year', 'day of the segment', 'day of a website without pages'];
+
+        yield 'a day for all segments' => [[[self::DAY], 'day'], false, ['other day', 'day of a website without pages']];
+        yield 'a day for all visits only' => [[[self::DAY], 'day', ''], false, ['other day', 'day of the segment', 'day of a website without pages']];
+        yield 'a day for the segment only' => [[[self::DAY], 'day', self::SEGMENT], false, array_values(array_diff($all, ['day of the segment']))];
+        yield 'the Transitions plugin' => [[[self::DAY], 'day', null, false, false, 'Transitions'], false, ['other day', 'day of a website without pages']];
+        yield 'a month' => [[['2010-03-01'], 'month'], false, ['day', 'other day', 'week', 'day of the segment', 'day of a website without pages']];
+        yield 'a month cascading down' => [[['2010-03-01'], 'month', null, true], false, ['day of a website without pages']];
+        yield 'a range' => [[[self::DAY . ',2010-03-07'], 'range'], false, $all];
+        yield 'another plugin' => [[[self::DAY], 'day', null, false, false, 'Actions'], false, $all];
+        yield 'a single Transitions report' => [[[self::DAY], 'day', null, false, false, 'Transitions.Transitions_1_pageviews'], false, $all];
+        yield 'a day whose logs were deleted' => [[[self::DAY], 'day'], true, $all];
+        yield 'a day whose logs were deleted, invalidated anyway' => [[[self::DAY], 'day', null, false, false, null, true], true, ['other day', 'day of a website without pages']];
+    }
+
+    public function testADayInvalidationChangesTheInvalidationMarkerOfWebsitesWithPages(): void
+    {
+        $this->selectPage(self::PAGE_URL);
+        Fixture::createWebsite('2010-01-01 00:00:00');
+        $partialArchives = StaticContainer::get(PartialArchives::class);
+        $invalidator = StaticContainer::get(ArchiveInvalidator::class);
+
+        $marker = $partialArchives->getInvalidationMarker(1);
+        $invalidator->markArchivesAsInvalidated([1, 2], [Date::factory('2010-03-01')], 'month');
+        self::assertSame($marker, $partialArchives->getInvalidationMarker(1));
+
+        $invalidator->markArchivesAsInvalidated([1, 2], [Date::factory(self::DAY)], 'day');
+        $changed = $partialArchives->getInvalidationMarker(1);
+        self::assertNotNull($changed);
+        self::assertNotSame($marker, $changed);
+        self::assertNull($partialArchives->getInvalidationMarker(2));
+
+        $invalidator->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        self::assertNotSame($changed, $partialArchives->getInvalidationMarker(1));
+
+        // until the website is deleted
+        $partialArchives->forgetSite(1);
+        self::assertNull($partialArchives->getInvalidationMarker(1));
+    }
+
+    public function testAFailureToDeletePartialArchivesDoesNotStopTheInvalidation(): void
+    {
+        $this->archiveAllPlugins(self::DAY);
+        $this->insertPartialArchive(1, Day::PERIOD_ID, self::DAY, self::DAY, '');
+        $dao = $this->getMockBuilder(PreprocessedPagesDao::class)->onlyMethods(['getSitesWithAnyPages'])->getMock();
+        $dao->method('getSitesWithAnyPages')->willThrowException(new \Exception('Lock wait timeout exceeded'));
+        StaticContainer::getContainer()->set(PartialArchives::class, new PartialArchives($dao, StaticContainer::get(DataAccessModel::class)));
+        StaticContainer::get(ArchiveInvalidator::class)->rememberToInvalidateArchivedReportsLater(1, Date::factory(self::DAY));
+
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+
+        self::assertArrayNotHasKey(self::DAY, StaticContainer::get(ArchiveInvalidator::class)->getRememberedArchivedReportsThatShouldBeInvalidated(1));
+        self::assertSame(ArchiveWriter::DONE_INVALIDATED, (int) Db::fetchOne(
+            'SELECT value FROM ' . Common::prefixTable('archive_numeric_2010_03') . " WHERE idsite = 1 AND period = 1 AND date1 = ? AND name = 'done'",
+            [self::DAY]
+        ));
+        self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, self::DAY, ''));
     }
 
     public function testADayBuildDuringAnInvalidationOfTheDayIsNotKept(): void
@@ -898,6 +1056,16 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         PrivacyManagerAPI::getInstance()->deleteDataSubjects([['idsite' => 1, 'idvisit' => $idVisit]]);
     }
 
+    /**
+     * Applies the remembered invalidations of the website as `core:archive` does before it archives it.
+     */
+    private function applyRememberedInvalidationsAsCronArchiving(): void
+    {
+        $cronArchive = new CronArchive();
+        $cronArchive->init();
+        $cronArchive->invalidateArchivedReportsForSitesThatNeedToBeArchivedAgain(1);
+    }
+
     private function setBrowserArchiving(bool $enabled): void
     {
         Config::getInstance()->General['enable_browser_archiving_triggering'] = (int) $enabled;
@@ -982,6 +1150,29 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
             . " WHERE idsite = 1 AND period = ? AND date1 = ? AND name LIKE 'done%.Transitions' AND value = ?",
             [$periodId, $date1, ArchiveWriter::DONE_PARTIAL]
         );
+    }
+
+    private function insertPartialArchive(int $idSite, int $periodId, string $date1, string $date2, string $segment): void
+    {
+        $table = ArchiveTableCreator::getNumericTable(Date::factory($date1));
+        $idArchive = (int) Db::fetchOne('SELECT COALESCE(MAX(idarchive), 0) + 1 FROM ' . $table);
+        Db::query(
+            'INSERT INTO ' . $table . ' (idarchive, idsite, date1, date2, period, ts_archived, name, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [$idArchive, $idSite, $date1, $date2, $periodId, '2010-03-21 00:00:00', $this->getPartialDoneFlag($idSite, $segment), ArchiveWriter::DONE_PARTIAL]
+        );
+    }
+
+    private function countPartialArchivesOf(int $idSite, int $periodId, string $date1, string $segment): int
+    {
+        return (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . ArchiveTableCreator::getNumericTable(Date::factory($date1)) . ' WHERE idsite = ? AND period = ? AND date1 = ? AND name = ? AND value = ?',
+            [$idSite, $periodId, $date1, $this->getPartialDoneFlag($idSite, $segment), ArchiveWriter::DONE_PARTIAL]
+        );
+    }
+
+    private function getPartialDoneFlag(int $idSite, string $segment): string
+    {
+        return Rules::getDoneFlagArchiveContainsOnePlugin(new Segment($segment, [$idSite]), 'Transitions');
     }
 
     private function setLoader(

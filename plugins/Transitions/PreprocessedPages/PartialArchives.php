@@ -13,56 +13,50 @@ namespace Piwik\Plugins\Transitions\PreprocessedPages;
 
 use Piwik\ArchiveProcessor\Rules;
 use Piwik\Common;
-use Piwik\Concurrency\LockBackend;
+use Piwik\Container\StaticContainer;
 use Piwik\DataAccess\ArchiveTableCreator;
 use Piwik\DataAccess\ArchiveWriter;
 use Piwik\DataAccess\Model;
-use Piwik\Date;
 use Piwik\Db;
+use Piwik\Option;
 use Piwik\Period;
 use Piwik\Period\Day;
-use Piwik\Plugins\PrivacyManager\PrivacyManager;
+use Piwik\Period\Range;
+use Piwik\Plugins\SitesManager\Model as SitesModel;
 use Piwik\Segment;
 
 /**
  * The partial archives holding pre-processed Transitions records, `done<segment hash>.Transitions`: written by the
  * rebuild of an added page and by builds within report requests.
  *
- * Core never invalidates partial archives, so they are deleted when the periods they hold are invalidated. Every
- * partial archive left is then newer than the last invalidation of its period, and is served before an older,
- * invalidated archive.
+ * Core doesn't invalidate partial archives, so they are deleted when core invalidates the periods they hold, once it
+ * applies the invalidation: for example the deletion of a data subject's visits only when the day is archived again.
+ * Until then they are served like core's own archives, and if core never applies it, as the logs of the day were
+ * deleted meanwhile, they stay like core's own archives.
  */
 final class PartialArchives
 {
-    /**
-     * How long an invalidation is noticed by a build of its day that runs meanwhile; longer than a build may run.
-     */
-    private const INVALIDATION_MARKER_TTL_SECONDS = 3600;
+    private const INVALIDATION_MARKER_OPTION_PREFIX = 'Transitions.invalidated_';
 
-    private const INVALIDATION_MARKER_PREFIX = 'Transitions.dayInvalidated.';
+    private const IDARCHIVES_PER_DELETE = 1000;
 
     public function __construct(
         private readonly Dao $dao,
-        private readonly Model $model,
-        private readonly LockBackend $lockBackend
+        private readonly Model $model
     ) {
     }
 
     /**
-     * Deletes the partial archives of the periods core invalidates, as `ArchiveInvalidator::markArchivesAsInvalidated()`
-     * selects them: the periods of the dates and their parent periods, for the segment, or for all segments without
-     * one. Also those still being built, as far as they are stored yet; a build within a request notices the
-     * invalidation, see {@link getInvalidationMarker()}. Dates core skips as their logs were deleted are skipped too.
-     * Child periods are left, as the invalidation doesn't tell whether it cascades down to them.
+     * Deletes the partial archives of the periods core invalidated, for the segment, or for all segments without one.
+     * A build of a day within a request that runs meanwhile notices it, see {@link getInvalidationMarker()}.
      *
      * @param array<int|string> $idSites
-     * @param array<Date|string> $dates
-     * @param string|false|null $period the period of the dates, a day if empty
+     * @param array<mixed> $periods the periods core invalidated, see `Archiving.markArchivesAsInvalidated.end`
      */
-    public function deleteForInvalidation(array $idSites, array $dates, $period, ?Segment $segment): void
+    public function deleteForInvalidation(array $idSites, array $periods, ?Segment $segment): void
     {
-        $periodLabel = empty($period) ? 'day' : (string) $period;
-        if ($periodLabel === 'range' || empty($dates)) {
+        $periods = array_values(array_filter($periods, fn($period): bool => $period instanceof Period && !$period instanceof Range));
+        if (empty($periods) || empty($idSites)) {
             return;
         }
 
@@ -72,26 +66,23 @@ final class PartialArchives
         }
 
         $periodsByTable = [];
-        $days = [];
-        foreach ($this->getPeriodsToInvalidate($dates, $periodLabel) as $periodToInvalidate) {
-            $table = ArchiveTableCreator::getNumericTable($periodToInvalidate->getDateStart(), false);
+        $hasDays = false;
+        foreach ($periods as $period) {
+            $table = ArchiveTableCreator::getNumericTable($period->getDateStart(), false);
             if (!empty($table)) {
-                $periodsByTable[$table][$periodToInvalidate->getRangeString()] = $periodToInvalidate;
+                $periodsByTable[$table][$period->getId() . ',' . $period->getRangeString()] = $period;
             }
-            if ($periodToInvalidate->getLabel() === 'day') {
-                $days[] = $periodToInvalidate->getDateStart()->toString();
+            $hasDays = $hasDays || $period->getLabel() === 'day';
+        }
+
+        if ($hasDays) {
+            foreach ($idSites as $idSite) {
+                $this->touchInvalidationMarker($idSite);
             }
         }
 
-        // a build of an invalidated day that runs now doesn't keep its records, see wasDayInvalidatedSince()
-        foreach ($idSites as $idSite) {
-            foreach ($days as $day) {
-                $this->touchInvalidationMarker($idSite, $day);
-            }
-        }
-
-        foreach ($periodsByTable as $table => $periods) {
-            $this->deletePartialArchives($table, $idSites, array_values($periods), $segment);
+        foreach ($periodsByTable as $table => $periodsOfTable) {
+            $this->deletePartialArchives($table, $idSites, array_values($periodsOfTable), $segment);
         }
     }
 
@@ -143,29 +134,44 @@ final class PartialArchives
     }
 
     /**
-     * Changes whenever partial archives of the day are deleted for an invalidation, and for a while after.
+     * Changes whenever days of the website are invalidated.
      */
-    public function getInvalidationMarker(int $idSite, string $day): ?string
+    public function getInvalidationMarker(int $idSite): ?string
     {
-        $value = $this->lockBackend->get($this->getInvalidationMarkerKey($idSite, $day));
+        $name = $this->getInvalidationMarkerOptionName($idSite);
+        Option::clearCachedOption($name);
+        $value = Option::get($name);
 
         return is_string($value) ? $value : null;
     }
 
-    private function touchInvalidationMarker(int $idSite, string $day): void
+    public function forgetSite(int $idSite): void
     {
-        $key = $this->getInvalidationMarkerKey($idSite, $day);
-        $previous = $this->lockBackend->get($key);
-        if (is_string($previous)) {
-            $this->lockBackend->deleteIfKeyHasValue($key, $previous);
-        }
-
-        $this->lockBackend->setIfNotExists($key, Common::getRandomString(16), self::INVALIDATION_MARKER_TTL_SECONDS);
+        Option::delete($this->getInvalidationMarkerOptionName($idSite));
     }
 
-    private function getInvalidationMarkerKey(int $idSite, string $day): string
+    /**
+     * Forgets the websites deleted while the plugin was deactivated.
+     */
+    public function forgetDeletedSites(): void
     {
-        return self::INVALIDATION_MARKER_PREFIX . $idSite . '.' . $day;
+        $idSites = array_map('intval', StaticContainer::get(SitesModel::class)->getSitesId());
+        foreach (array_keys(Option::getLike(self::INVALIDATION_MARKER_OPTION_PREFIX . '%')) as $name) {
+            $name = (string) $name;
+            if (!in_array((int) substr($name, strlen(self::INVALIDATION_MARKER_OPTION_PREFIX)), $idSites, true)) {
+                Option::delete($name);
+            }
+        }
+    }
+
+    private function touchInvalidationMarker(int $idSite): void
+    {
+        Option::set($this->getInvalidationMarkerOptionName($idSite), Common::getRandomString(16));
+    }
+
+    private function getInvalidationMarkerOptionName(int $idSite): string
+    {
+        return self::INVALIDATION_MARKER_OPTION_PREFIX . $idSite;
     }
 
     /**
@@ -189,68 +195,15 @@ final class PartialArchives
         }
 
         $rows = Db::fetchAll(
-            'SELECT idarchive, period, date1 FROM `' . $table . '` WHERE idsite IN (' . implode(',', $idSites) . ')'
+            'SELECT idarchive FROM `' . $table . '` WHERE idsite IN (' . implode(',', $idSites) . ')'
             . ' AND (' . implode(' OR ', $periodConditions) . ') AND ' . $nameCondition
-            . ' AND value IN (' . implode(',', [ArchiveWriter::DONE_PARTIAL, ArchiveWriter::DONE_ERROR, ArchiveWriter::DONE_ERROR_INVALIDATED]) . ')',
+            . ' AND value = ' . ArchiveWriter::DONE_PARTIAL,
             $bind
         );
-        if (empty($rows)) {
-            return;
+
+        $idArchives = array_map(fn(array $row): int => (int) $row['idarchive'], $rows);
+        foreach (array_chunk($idArchives, self::IDARCHIVES_PER_DELETE) as $chunk) {
+            $this->deleteArchives($periods[0], $chunk);
         }
-
-        $this->deleteArchives($periods[0], array_map(fn(array $row): int => (int) $row['idarchive'], $rows));
-    }
-
-    /**
-     * As `ArchiveInvalidator::markArchivesAsInvalidated()`: the period of each date, unless its logs were deleted, and
-     * the parent periods of a period within one month.
-     *
-     * @param array<Date|string> $dates
-     * @return list<Period>
-     */
-    private function getPeriodsToInvalidate(array $dates, string $periodLabel): array
-    {
-        $minimumDateWithLogs = $this->getMinimumDateWithLogs();
-
-        $periods = [];
-        foreach ($dates as $date) {
-            try {
-                $period = Period\Factory::build($periodLabel, $date instanceof Date ? $date : Date::factory((string) $date));
-            } catch (\Exception $e) {
-                // core rejects it
-                continue;
-            }
-
-            if (
-                $minimumDateWithLogs !== null
-                && ($period->getDateEnd()->isEarlier($minimumDateWithLogs) || $period->getDateStart()->isEarlier($minimumDateWithLogs))
-            ) {
-                continue;
-            }
-
-            $periods[] = $period;
-            if ($period->getDateStart()->toString('Y-m') !== $period->getDateEnd()->toString('Y-m')) {
-                continue;
-            }
-
-            $parent = $period;
-            while (
-                !in_array($parent->getLabel(), ['year', 'range'], true)
-                && Period\Factory::isPeriodEnabledForAPI($parent->getParentPeriodLabel())
-            ) {
-                $parent = Period\Factory::build($parent->getParentPeriodLabel(), $period->getDateStart());
-                $periods[] = $parent;
-            }
-        }
-
-        return $periods;
-    }
-
-    private function getMinimumDateWithLogs(): ?Date
-    {
-        $settings = PrivacyManager::getPurgeDataSettings();
-        $days = (int) ($settings['delete_logs_older_than'] ?? 0);
-
-        return !empty($settings['delete_logs_enable']) && $days > 0 ? Date::factory('today')->subDay($days) : null;
     }
 }
