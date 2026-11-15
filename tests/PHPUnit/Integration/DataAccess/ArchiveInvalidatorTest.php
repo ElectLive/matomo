@@ -788,7 +788,8 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
             $posted[] = [$idSites, array_map(fn($period) => $period->getLabel() . ' ' . $period->getRangeString(), $periods), $segment, $name];
         });
 
-        $this->invalidator->markArchivesAsInvalidated([1], [Date::factory('2014-04-05')], 'week', null, true, false, 'ExamplePlugin');
+        // the IDs are posted as integers
+        $this->invalidator->markArchivesAsInvalidated(['1'], [Date::factory('2014-04-05')], 'week', null, true, false, 'ExamplePlugin');
 
         $this->assertCount(1, $posted);
         [$idSites, $periods, $segment, $name] = $posted[0];
