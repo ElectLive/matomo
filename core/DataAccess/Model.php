@@ -997,6 +997,11 @@ class Model
             $bind[] = 'done%.' . addcslashes($plugin, '%_\\');
         }
 
+        $singleReportInvalidations = $archiveFilter->getSingleReportInvalidations();
+        if ($singleReportInvalidations !== null) {
+            $conditions[] = $singleReportInvalidations ? "(report IS NOT NULL AND report <> '')" : "(report IS NULL OR report = '')";
+        }
+
         return [$conditions, $bind];
     }
 

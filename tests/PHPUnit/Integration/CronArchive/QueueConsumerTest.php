@@ -382,6 +382,13 @@ class QueueConsumerTest extends IntegrationTestCase
             ],
             [],
             [], // end of idsite=1
+            [ // end of idsite=2, whose single report is archived after the other archives of all sites
+            ],
+            [ // end of idsite=3
+            ],
+            // the single reports of idsite=1 wait for the archives of their periods in progress
+            [],
+            [],
             [
                 [
                     'idarchive' => '1',
@@ -399,9 +406,7 @@ class QueueConsumerTest extends IntegrationTestCase
                     'process_id' => null,
                 ],
             ],
-            [ // end of idsite=2
-            ],
-            [ // end of idsite=3
+            [ // end of the single reports of idsite=2
             ],
         ];
 
@@ -457,23 +462,23 @@ class QueueConsumerTest extends IntegrationTestCase
             $iteratedInvalidations[] = $next;
         }
 
+        $actionsDay = [
+            'idarchive' => '1',
+            'idsite' => '1',
+            'date1' => '2018-03-06',
+            'date2' => '2018-03-06',
+            'period' => '1',
+            'name' => 'done.Actions',
+            'report' => 'testReport',
+            'plugin' => 'Actions',
+            'segment' => '',
+            'ts_started' => null,
+            'status' => '0',
+            'processing_host' => null,
+            'process_id' => null,
+        ];
         $expectedInvalidationsFound = [
             [
-                [
-                    'idarchive' => '1',
-                    'idsite' => '1',
-                    'date1' => '2018-03-06',
-                    'date2' => '2018-03-06',
-                    'period' => '1',
-                    'name' => 'done.Actions',
-                    'report' => 'testReport',
-                    'plugin' => 'Actions',
-                    'segment' => '',
-                    'ts_started' => null,
-                    'status' => '0',
-                    'processing_host' => null,
-                    'process_id' => null,
-                ],
                 [
                     'idarchive' => '1',
                     'idsite' => '1',
@@ -511,6 +516,10 @@ class QueueConsumerTest extends IntegrationTestCase
             [], // end of idsite=1
             [], // end of idsite=2
             [], // end of idsite=3
+            // the single report's week and month wait for its day
+            [$actionsDay],
+            [],
+            [], // end of the single reports of idsite=1
         ];
 
         $this->assertEquals($expectedInvalidationsFound, $iteratedInvalidations);
@@ -1157,6 +1166,63 @@ class QueueConsumerTest extends IntegrationTestCase
      *
      * @return int[]
      */
+    /**
+     * @dataProvider getMaxSitesToProcess
+     */
+    public function testSingleReportsAreProcessedAfterTheOtherInvalidationsOfAllSites(?int $maxSitesToProcess, array $expected)
+    {
+        Fixture::createWebsite('2015-02-03');
+        Fixture::createWebsite('2015-02-03');
+        Fixture::createWebsite('2015-02-03');
+
+        $cronArchive = $this->getMockCronArchive();
+        $cronArchive->init();
+
+        $queueConsumer = new QueueConsumer(
+            new NullLogger(),
+            new FixedSiteIds([1, 2, 3]),
+            3,
+            24,
+            new Model(),
+            new SegmentArchiving(),
+            $cronArchive,
+            $this->makeTestArchiveFilter()
+        );
+        $queueConsumer->setMaxSitesToProcess($maxSitesToProcess);
+
+        $this->insertInvalidations([
+            ['idarchive' => 1, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-08', 'date2' => '2018-03-08', 'period' => Day::PERIOD_ID, 'report' => 'testReport'],
+            ['idarchive' => 2, 'name' => 'done', 'idsite' => 1, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => null],
+            ['idarchive' => 3, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-01', 'date2' => '2018-03-31', 'period' => Month::PERIOD_ID, 'report' => 'testReport'],
+            ['idarchive' => 4, 'name' => 'done', 'idsite' => 2, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => null],
+            ['idarchive' => 5, 'name' => 'done.Actions', 'idsite' => 2, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => 'testReport'],
+            ['idarchive' => 6, 'name' => 'done.Actions', 'idsite' => 3, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => null],
+        ]);
+
+        $processed = [];
+        for ($i = 0; $i < 100; $i++) {
+            $next = $queueConsumer->getNextArchivesToProcess();
+            if ($next === null) {
+                break;
+            }
+
+            foreach ($next as $item) {
+                $processed[] = (int) $item['idarchive'];
+                // finished
+                Db::query('DELETE FROM ' . Common::prefixTable('archive_invalidations') . ' WHERE idinvalidation = ?', [$item['idinvalidation']]);
+            }
+        }
+
+        $this->assertSame($expected, $processed);
+    }
+
+    public function getMaxSitesToProcess(): iterable
+    {
+        yield 'all sites' => [null, [2, 4, 6, 1, 3, 5]];
+        // the single reports of the sites processed still follow
+        yield 'one site' => [1, [2, 1, 3]];
+    }
+
     private function consumeAllInvalidations(Model $model, CronArchive\ArchiveFilter $archiveFilter): array
     {
         $cronArchive = $this->getMockCronArchive();
@@ -1555,6 +1621,38 @@ class QueueConsumerTest extends IntegrationTestCase
 
     public function getTestDataForShouldSkipArchiveBecauseLowerPeriodOrSegmentIsInProgress(): iterable
     {
+        yield 'a single report in progress does not hold back the archive of all plugins of a period containing it' => [
+            'existingInvalidations' => [
+                ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
+            ],
+            'archiveToProcess' => ['name' => 'done', 'idsite' => 1, 'date1' => '2020-03-01', 'date2' => '2020-03-31', 'period' => Month::PERIOD_ID],
+            'expected' => null,
+        ];
+
+        yield 'a single report in progress does not hold back the archive of a plugin of the same period' => [
+            'existingInvalidations' => [
+                ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
+            ],
+            'archiveToProcess' => ['name' => 'done.Actions', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID],
+            'expected' => null,
+        ];
+
+        yield 'a single report in progress holds back a single report of a period containing it' => [
+            'existingInvalidations' => [
+                ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
+            ],
+            'archiveToProcess' => ['name' => 'done.Actions', 'report' => 'otherReport', 'idsite' => 1, 'date1' => '2020-03-01', 'date2' => '2020-03-31', 'period' => Month::PERIOD_ID],
+            'expected' => 'lower or same period in progress (period = day, date = 2020-03-04)',
+        ];
+
+        yield 'an archive of all plugins in progress holds back a single report of a period containing it' => [
+            'existingInvalidations' => [
+                ['name' => 'done', 'idsite' => 1, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
+            ],
+            'archiveToProcess' => ['name' => 'done.Actions', 'report' => 'testReport', 'idsite' => 1, 'date1' => '2020-03-01', 'date2' => '2020-03-31', 'period' => Month::PERIOD_ID],
+            'expected' => 'lower or same period in progress (period = day, date = 2020-03-04)',
+        ];
+
         yield 'different period and different idSite should not be detected as intersecting' => [
             'existingInvalidations' => [
                 ['name' => 'done', 'idsite' => 5, 'date1' => '2020-03-04', 'date2' => '2020-03-04', 'period' => Day::PERIOD_ID, 'status' => 1, 'ts_started' => date('Y-m-d H:i:s')],
