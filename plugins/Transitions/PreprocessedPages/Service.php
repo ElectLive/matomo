@@ -165,8 +165,9 @@ class Service
 
     /**
      * Locks the website's pages, then the scheduled rebuilds: core rewrites the whole list of them on every change, so
-     * the changes for different websites are made one at a time too. `core:archive` applies the list without a lock,
-     * which can still drop a change made at that moment.
+     * the changes for different websites are made one at a time too. Core's other writers of the list, such as
+     * `core:archive` applying it, segment changes and plugin activations, take no lock, so a change made at that
+     * moment can still be lost.
      *
      * @return list<Lock>
      */
