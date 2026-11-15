@@ -33,6 +33,8 @@ use Piwik\Log\LoggerInterface;
  */
 class Model
 {
+    private const SITES_PER_PARTIAL_ARCHIVE_SCAN = 100;
+
     /**
      * @var LoggerInterface
      */
@@ -64,24 +66,17 @@ class Model
             }
         }
 
-        // also the site/periods with a partial archive, whose newer archive for all plugins may be the only one
         $sql = "SELECT idsite, date1, date2, period, name,
-                       GROUP_CONCAT(idarchive, '.', value ORDER BY ts_archived DESC, idarchive DESC) as archives,
-                       MAX(`value` = " . ArchiveWriter::DONE_PARTIAL . ") as has_partial
+                       GROUP_CONCAT(idarchive, '.', value ORDER BY ts_archived DESC, idarchive DESC) as archives
                   FROM `$archiveTable`
                  WHERE name LIKE 'done%'
                    AND `value` NOT IN (" . ArchiveWriter::DONE_ERROR . ", " . ArchiveWriter::DONE_ERROR_INVALIDATED . ")
-              GROUP BY idsite, date1, date2, period, name HAVING count(*) > 1 OR has_partial = 1";
+              GROUP BY idsite, date1, date2, period, name HAVING count(*) > 1";
 
         $archiveIds = array();
-        $sitePeriodsWithPartialArchives = [];
 
         $rows = Db::fetchAll($sql);
         foreach ($rows as $row) {
-            if ($row['has_partial']) {
-                $sitePeriodsWithPartialArchives[] = [$row['idsite'], $row['date1'], $row['date2'], $row['period']];
-            }
-
             $duplicateArchives = explode(',', $row['archives']);
 
             // do not consider purging partial archives, if they are the latest archive,
@@ -116,7 +111,7 @@ class Model
         }
 
         // also those finished after the finalize of the newer archive for all plugins deleted the older ones
-        $partialArchiveIds = $this->getPartialArchiveIdsOlderThanUsableFullArchive($archiveTable, $sitePeriodsWithPartialArchives);
+        $partialArchiveIds = $this->getPartialArchiveIdsOlderThanUsableFullArchive($archiveTable);
 
         return array_values(array_unique(array_merge($archiveIds, $partialArchiveIds)));
     }
@@ -125,18 +120,21 @@ class Model
      * Partial archives of a plugin (done<hash>.<Plugin>) are read only until a newer usable archive for all plugins
      * (done<hash>) exists for the same site, period and segment, see ArchiveSelector. Older ones are never read again.
      *
-     * Only the given site and period combinations are looked at, those with a partial archive, so the archive table
-     * isn't scanned a second time.
+     * The table is read a range of sites at a time, so only the archives to delete are held in memory.
      *
-     * @param array<array{0: int|string, 1: string, 2: string, 3: int|string}> $sitePeriods idsite, date1, date2, period
      * @return string[]
      */
-    private function getPartialArchiveIdsOlderThanUsableFullArchive(string $archiveTable, array $sitePeriods): array
+    private function getPartialArchiveIdsOlderThanUsableFullArchive(string $archiveTable): array
     {
         $usableValues = implode(',', [ArchiveWriter::DONE_OK, ArchiveWriter::DONE_OK_TEMPORARY, ArchiveWriter::DONE_INVALIDATED]);
 
+        $idSites = Db::fetchRow("SELECT MIN(idsite) AS min_idsite, MAX(idsite) AS max_idsite FROM `$archiveTable`");
+        if (empty($idSites) || $idSites['min_idsite'] === null) {
+            return [];
+        }
+
         $archiveIds = [];
-        foreach (array_chunk(array_unique($sitePeriods, SORT_REGULAR), 500) as $chunk) {
+        for ($idSite = (int) $idSites['min_idsite']; $idSite <= (int) $idSites['max_idsite']; $idSite += self::SITES_PER_PARTIAL_ARCHIVE_SCAN) {
             $sql = "SELECT DISTINCT partial.idarchive
                       FROM `$archiveTable` partial
                       JOIN `$archiveTable` fullarchive
@@ -148,12 +146,11 @@ class Model
                        AND fullarchive.value IN ($usableValues)
                        AND fullarchive.ts_archived > partial.ts_archived
                        AND fullarchive.idarchive > partial.idarchive
-                     WHERE (partial.idsite, partial.date1, partial.date2, partial.period) IN ("
-                        . implode(', ', array_fill(0, count($chunk), '(?, ?, ?, ?)')) . ")
+                     WHERE partial.idsite BETWEEN ? AND ?
                        AND partial.name LIKE 'done%.%'
                        AND partial.value = " . ArchiveWriter::DONE_PARTIAL;
 
-            $rows = Db::fetchAll($sql, array_merge(...$chunk));
+            $rows = Db::fetchAll($sql, [$idSite, $idSite + self::SITES_PER_PARTIAL_ARCHIVE_SCAN - 1]);
             $archiveIds = array_merge($archiveIds, array_map('strval', array_column($rows, 'idarchive')));
         }
 
