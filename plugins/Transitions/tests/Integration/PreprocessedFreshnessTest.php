@@ -31,6 +31,7 @@ use Piwik\EventDispatcher;
 use Piwik\Log\LoggerInterface;
 use Piwik\Metrics;
 use Piwik\Option;
+use Piwik\Piwik;
 use Piwik\Period\Day;
 use Piwik\Period\Month;
 use Piwik\Period\Week;
@@ -52,6 +53,7 @@ use Piwik\Segment;
 use Piwik\Tests\Fixtures\SomeVisitsManyPageviewsWithTransitions;
 use Piwik\Tests\Framework\Fixture;
 use Piwik\Tests\Framework\Mock\FakeAccess;
+use Piwik\Tests\Framework\Mock\FakeLogger;
 use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
 
 /**
@@ -652,6 +654,23 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
             [self::DAY]
         ));
         self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, self::DAY, ''));
+    }
+
+    public function testArgumentsOfOtherTypesAreLoggedAndASegmentOfAnotherTypeStandsForAllSegments(): void
+    {
+        $this->selectPage(self::PAGE_URL);
+        $this->insertPartialArchive(1, Day::PERIOD_ID, self::DAY, self::DAY, '');
+        $this->insertPartialArchive(1, Day::PERIOD_ID, self::DAY, self::DAY, self::SEGMENT);
+        $this->insertPartialArchive(1, Day::PERIOD_ID, '2010-03-20', '2010-03-20', '');
+        $logger = new FakeLogger();
+        StaticContainer::getContainer()->set(LoggerInterface::class, $logger);
+
+        Piwik::postEvent('Archiving.markArchivesAsInvalidated.end', [['1', 'x'], [new Day(Date::factory(self::DAY)), self::DAY], self::SEGMENT, null]);
+
+        self::assertStringContainsString('was posted with websites, periods or a segment of another type', $logger->output);
+        self::assertSame(0, $this->countPartialArchivesOf(1, Day::PERIOD_ID, self::DAY, ''));
+        self::assertSame(0, $this->countPartialArchivesOf(1, Day::PERIOD_ID, self::DAY, self::SEGMENT));
+        self::assertSame(1, $this->countPartialArchivesOf(1, Day::PERIOD_ID, '2010-03-20', ''));
     }
 
     public function testADayBuildDuringAnInvalidationOfTheDayIsNotKept(): void

@@ -74,12 +74,13 @@ class Transitions extends \Piwik\Plugin
      * Core doesn't invalidate partial archives, so the pre-processed pages' records built before an invalidation, for
      * example of the visits of a deleted data subject, are no longer served once core applies it, see
      * {@link PartialArchives}. Invalidations of another plugin's reports, or of single reports, leave them. A failure
-     * doesn't stop core's invalidation.
+     * doesn't stop core's invalidation. Arguments of other types are logged; a segment of another type stands for all
+     * segments, as no records may be served from the previous data.
      *
-     * @param array<int|string> $idSites
-     * @param array<mixed> $periods
-     * @param Segment|null $segment
-     * @param string|null $name
+     * @param mixed $idSites
+     * @param mixed $periods
+     * @param mixed $segment
+     * @param mixed $name
      */
     public function invalidatePartialArchivesOfPeriods($idSites, $periods, $segment, $name): void
     {
@@ -87,14 +88,27 @@ class Transitions extends \Piwik\Plugin
             return;
         }
 
+        $logger = StaticContainer::get(LoggerInterface::class);
+        $idSites = is_array($idSites) ? $idSites : [$idSites];
+        $periods = is_array($periods) ? $periods : [$periods];
+        $validIdSites = array_values(array_map('intval', array_filter($idSites, fn($idSite): bool => is_numeric($idSite))));
+        $validPeriods = array_values(array_filter($periods, fn($period): bool => $period instanceof Period));
+        if (
+            count($validIdSites) !== count($idSites)
+            || count($validPeriods) !== count($periods)
+            || ($segment !== null && !$segment instanceof Segment)
+        ) {
+            $logger->error('Archiving.markArchivesAsInvalidated.end was posted with websites, periods or a segment of another type.');
+        }
+
         try {
             StaticContainer::get(PartialArchives::class)->invalidateForPeriods(
-                array_values(array_map('intval', (array) $idSites)),
-                array_values(array_filter((array) $periods, fn($period): bool => $period instanceof Period)),
+                $validIdSites,
+                $validPeriods,
                 $segment instanceof Segment ? $segment : null
             );
         } catch (\Throwable $e) {
-            StaticContainer::get(LoggerInterface::class)->error(
+            $logger->error(
                 'Could not invalidate the pre-processed Transitions records of invalidated periods: {exception}',
                 ['exception' => $e]
             );
