@@ -104,7 +104,7 @@ final class StoredRecordsLoader
         }
         $site = new Site($idSite);
         // records of another segment may predate its last change, as nothing builds them
-        if (!$this->canBuildForSegment($site, $segment)) {
+        if (!Records::isBuiltForSegment($idSite, $segment)) {
             return null;
         }
         $this->applyRememberedInvalidations($site, $periods);
@@ -503,18 +503,6 @@ final class StoredRecordsLoader
         }
 
         return true;
-    }
-
-    /**
-     * Records are served and built for all visits and the segments that are pre-processed, unless segments aren't
-     * archived for the plugin.
-     */
-    private function canBuildForSegment(Site $site, Segment $segment): bool
-    {
-        $idSite = (int) $site->getId();
-
-        return $segment->isEmpty()
-            || (Rules::isSegmentPreProcessed([$idSite], $segment) && !Rules::isSegmentPluginArchivingDisabled('Transitions', $idSite));
     }
 
     private function isListed(int $idSite, int $idPage): bool

@@ -28,6 +28,7 @@ use Piwik\Db;
 use Piwik\Metrics;
 use Piwik\Period\Factory as PeriodFactory;
 use Piwik\Piwik;
+use Piwik\Plugins\SegmentEditor\API as SegmentEditorAPI;
 use Piwik\Plugins\Transitions\API;
 use Piwik\Plugins\Transitions\PreprocessedPages\Records;
 use Piwik\Plugins\Transitions\PreprocessedPages\Service;
@@ -367,6 +368,28 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
         self::assertSame(array_sum($rawCounts) - array_sum($topCounts), (int) $table->getSummaryRow()->getColumn($column), $period);
     }
 
+    public function testNoRecordsForAPreProcessedSegmentWhoseTransitionsArchivingIsDisabled(): void
+    {
+        $this->selectPage(self::PAGE_URL);
+        Config::getInstance()->General['disable_archiving_segment_for_plugins'] = 'Transitions';
+        $segment = new Segment(self::SEGMENT, [1]);
+
+        // the segment's archive for all plugins, whose Transitions records would never be served
+        $this->preProcessSegment(self::SEGMENT);
+        Cache::getTransientCache()->flushAll();
+        self::assertGreaterThan(0, Archive::build(1, 'day', self::DAY, self::SEGMENT)->getNumeric('nb_visits'));
+
+        self::assertGreaterThan(0, (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' WHERE idsite = 1 AND period = 1 AND date1 = ? AND name = ?',
+            [self::DAY, Rules::getDoneFlagArchiveContainsAllPlugins($segment)]
+        ));
+        self::assertSame(0, (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' r JOIN ' . Common::prefixTable('archive_numeric_2010_03')
+            . ' f ON f.idarchive = r.idarchive AND f.name LIKE ? WHERE r.name LIKE ?',
+            [Rules::getDoneFlagArchiveContainsAllPlugins($segment) . '%', 'Transitions\_%']
+        ));
+    }
+
     /**
      * @dataProvider getSegments
      */
@@ -606,9 +629,35 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
 
     private function archive(string $period, string $date, string $segment = ''): void
     {
+        if ($segment !== '') {
+            $this->preProcessSegment($segment);
+        }
         Cache::getTransientCache()->flushAll();
         // reading any record of the plugin archives it
         Archive::build(1, $period, $date, $segment)->getNumeric(Records::getRebuildReportName(1));
+    }
+
+    /**
+     * Records are built for pre-processed segments only.
+     */
+    private function preProcessSegment(string $segment): void
+    {
+        foreach (SegmentEditorAPI::getInstance()->getAll(1) as $stored) {
+            if ($stored['definition'] === $segment) {
+                return;
+            }
+        }
+
+        // a segment can only be pre-processed with cron archiving
+        $general = Config::getInstance()->General;
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 0;
+        try {
+            SegmentEditorAPI::getInstance()->add('pre-processed', $segment, 1, true);
+        } finally {
+            Config::getInstance()->General = $general;
+        }
+        Cache::getTransientCache()->flushAll();
+        Cache::getEagerCache()->flushAll();
     }
 
     private function getStoredNumeric(int $idPage, string $numeric, int $periodId, string $date1): ?float

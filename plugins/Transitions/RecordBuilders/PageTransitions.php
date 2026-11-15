@@ -83,16 +83,21 @@ class PageTransitions extends RecordBuilder
     }
 
     /**
-     * Ranges aren't archived: reports sum them from their subperiods. An invalid row limit only stops the Transitions
-     * records from being archived, not the other plugins' reports.
+     * Ranges aren't archived: reports sum them from their subperiods. Segments whose records are never served aren't
+     * either. An invalid row limit only stops the Transitions records from being archived, not the other plugins'
+     * reports.
      */
     public function isEnabled(ArchiveProcessor $archiveProcessor): bool
     {
-        if ($archiveProcessor->getParams()->getPeriod() instanceof Range || empty($this->getIdPagesToBuild($archiveProcessor))) {
+        $idSite = $this->getIdSite($archiveProcessor);
+        if (
+            $archiveProcessor->getParams()->getPeriod() instanceof Range
+            || !Records::isBuiltForSegment($idSite, $archiveProcessor->getParams()->getSegment())
+            || empty($this->getIdPagesToBuild($archiveProcessor))
+        ) {
             return false;
         }
 
-        $idSite = $this->getIdSite($archiveProcessor);
         try {
             Records::getMaxRows($idSite);
         } catch (\Exception $e) {

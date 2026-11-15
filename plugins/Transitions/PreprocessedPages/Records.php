@@ -11,10 +11,12 @@ declare(strict_types=1);
 
 namespace Piwik\Plugins\Transitions\PreprocessedPages;
 
+use Piwik\ArchiveProcessor\Rules;
 use Piwik\Config;
 use Piwik\Config\GeneralConfig;
 use Piwik\DataTable;
 use Piwik\DataTable\Row;
+use Piwik\Segment;
 
 /**
  * Names and layout of the archive records of a pre-processed page, `Transitions_<idpage>_<part>`. They are keyed by the
@@ -82,6 +84,15 @@ final class Records
 
     public const DEFAULT_MAX_ROWS = 1000;
     public const DEFAULT_MAX_ROWS_SERVED = 100;
+
+    /**
+     * Records are built and served for all visits and the segments pre-processed for Transitions only.
+     */
+    public static function isBuiltForSegment(int $idSite, Segment $segment): bool
+    {
+        return $segment->isEmpty()
+            || (Rules::isSegmentPreProcessed([$idSite], $segment) && !Rules::isSegmentPluginArchivingDisabled('Transitions', $idSite));
+    }
 
     public static function getRecordName(int $idPage, string $part): string
     {
