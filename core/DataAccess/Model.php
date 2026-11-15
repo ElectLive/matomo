@@ -120,7 +120,7 @@ class Model
      * Partial archives of a plugin (done<hash>.<Plugin>) are read only until a newer usable archive for all plugins
      * (done<hash>) exists for the same site, period and segment, see ArchiveSelector. Older ones are never read again.
      *
-     * The table is read a range of sites at a time, so only the archives to delete are held in memory.
+     * The table is read for some of its sites at a time, so only the archives to delete are held in memory.
      *
      * @return string[]
      */
@@ -128,13 +128,10 @@ class Model
     {
         $usableValues = implode(',', [ArchiveWriter::DONE_OK, ArchiveWriter::DONE_OK_TEMPORARY, ArchiveWriter::DONE_INVALIDATED]);
 
-        $idSites = Db::fetchRow("SELECT MIN(idsite) AS min_idsite, MAX(idsite) AS max_idsite FROM `$archiveTable`");
-        if (empty($idSites) || $idSites['min_idsite'] === null) {
-            return [];
-        }
+        $idSites = array_map('intval', array_column(Db::fetchAll("SELECT DISTINCT idsite FROM `$archiveTable`"), 'idsite'));
 
         $archiveIds = [];
-        for ($idSite = (int) $idSites['min_idsite']; $idSite <= (int) $idSites['max_idsite']; $idSite += self::SITES_PER_PARTIAL_ARCHIVE_SCAN) {
+        foreach (array_chunk($idSites, self::SITES_PER_PARTIAL_ARCHIVE_SCAN) as $idSitesOfChunk) {
             $sql = "SELECT DISTINCT partial.idarchive
                       FROM `$archiveTable` partial
                       JOIN `$archiveTable` fullarchive
@@ -146,11 +143,11 @@ class Model
                        AND fullarchive.value IN ($usableValues)
                        AND fullarchive.ts_archived > partial.ts_archived
                        AND fullarchive.idarchive > partial.idarchive
-                     WHERE partial.idsite BETWEEN ? AND ?
+                     WHERE partial.idsite IN (" . implode(',', $idSitesOfChunk) . ")
                        AND partial.name LIKE 'done%.%'
                        AND partial.value = " . ArchiveWriter::DONE_PARTIAL;
 
-            $rows = Db::fetchAll($sql, [$idSite, $idSite + self::SITES_PER_PARTIAL_ARCHIVE_SCAN - 1]);
+            $rows = Db::fetchAll($sql);
             $archiveIds = array_merge($archiveIds, array_map('strval', array_column($rows, 'idarchive')));
         }
 

@@ -128,6 +128,34 @@ class ModelTest extends IntegrationTestCase
         $this->assertEquals(['1', '2', '3', '10', '11', '15'], $ids);
     }
 
+    public function testGetInvalidatedArchiveIdsSafeToDeletePurgesPartialArchivesOfAllSitesInChunks()
+    {
+        $table = ArchiveTableCreator::getNumericTable(Date::factory('2020-02-03'), true);
+
+        // more sites than one chunk holds, with sparse IDs
+        $idSites = array_merge(range(1, 149, 2), range(1000, 1074), [1000000]);
+        $expected = [];
+        $idArchive = 0;
+        foreach ($idSites as $idSite) {
+            foreach ([['done.Plugin', ArchiveWriter::DONE_PARTIAL, '2020-02-04 01:00:00'], ['done', ArchiveWriter::DONE_OK, '2020-02-04 02:00:00']] as [$name, $value, $tsArchived]) {
+                ++$idArchive;
+                Db::query(
+                    "INSERT INTO `$table` (idarchive, idsite, date1, date2, period, `name`, `value`, ts_archived) VALUES (?, ?, '2020-02-03', '2020-02-03', ?, ?, ?, ?)",
+                    [$idArchive, $idSite, Day::PERIOD_ID, $name, $value, $tsArchived]
+                );
+                if ($value === ArchiveWriter::DONE_PARTIAL) {
+                    $expected[] = (string) $idArchive;
+                }
+            }
+        }
+
+        $ids = $this->model->getInvalidatedArchiveIdsSafeToDelete($table);
+        sort($ids);
+        sort($expected);
+
+        $this->assertSame($expected, $ids);
+    }
+
     public function testResetFailedArchivingJobsUpdatesCorrectStatuses()
     {
         Date::$now = strtotime('2020-03-03 04:00:00');
