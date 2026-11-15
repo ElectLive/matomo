@@ -390,6 +390,24 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
         ));
     }
 
+    public function testNoRecordsForASegmentThatIsNotPreProcessed(): void
+    {
+        $idPage = $this->selectPage(self::PAGE_URL);
+        $segment = new Segment(self::SEGMENT, [1]);
+
+        // the segment's Transitions archive, archived in a request
+        Cache::getTransientCache()->flushAll();
+        Archive::build(1, 'day', self::DAY, self::SEGMENT)->getNumeric(Records::getRebuildReportName($idPage));
+
+        self::assertSame(1, (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03') . ' WHERE idsite = 1 AND period = 1 AND date1 = ? AND name = ?',
+            [self::DAY, Rules::getDoneFlagArchiveContainsOnePlugin($segment, 'Transitions')]
+        ));
+        self::assertSame(0, (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('archive_numeric_2010_03') . " WHERE name LIKE 'Transitions\\_%'"
+        ));
+    }
+
     /**
      * @dataProvider getSegments
      */
