@@ -353,6 +353,33 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
         self::assertSame($month['pageMetrics'], $summed['pageMetrics']);
     }
 
+    public function testRecordsOfANewerPartialArchiveAreNotServedOnceTheFullArchiveIsInvalidated(): void
+    {
+        // the day's archive for all plugins, built before the page was selected
+        $this->setBrowserArchiving(true);
+        Cache::getTransientCache()->flushAll();
+        Archive::build(1, 'day', self::DAY)->getNumeric('nb_visits');
+
+        // without cron, the request builds the page's day in a partial archive
+        $this->selectPage(self::PAGE_URL);
+        $built = $this->request('day', self::DAY);
+        self::assertSame(1, $built['preprocessed']);
+        self::assertSame(1, $this->countPartialArchives(self::DAY));
+
+        // as after the deletion of a data subject's visits: core invalidates the archive for all plugins, never the
+        // partial archive holding the page's records
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        self::assertSame(1, $this->countPartialArchives(self::DAY));
+
+        // with cron archiving nothing is built in the request, and the stored records aren't served until archived again
+        $this->setBrowserArchiving(false);
+        $raw = $this->request('day', self::DAY);
+        self::assertArrayNotHasKey('preprocessed', $raw);
+        unset($built['preprocessed'], $built['preprocessedAt']);
+        self::assertSame($this->toArray($built), $this->toArray($raw));
+        self::assertArrayNotHasKey('preprocessed', $this->request('month', self::DAY));
+    }
+
     public function testDeletingAVisitIsReflectedInADayBuiltWithoutCron(): void
     {
         $idPage = $this->selectPage(self::PAGE_URL);
