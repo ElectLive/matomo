@@ -849,6 +849,55 @@ class ModelTest extends IntegrationTestCase
         ];
     }
 
+    public function testGetSitesWithSingleReportInvalidations()
+    {
+        $day = ['date1' => '2020-01-10', 'date2' => '2020-01-10', 'period' => Day::PERIOD_ID];
+        $this->insertInvalidations([
+            $day + ['idsite' => 1, 'name' => 'done.Actions', 'report' => 'Actions_hits'],
+            $day + ['idsite' => 1, 'name' => 'done.Goals', 'report' => 'getMetrics'],
+            $day + ['idsite' => 2, 'name' => 'done'],
+            $day + ['idsite' => 3, 'name' => 'done.Actions', 'report' => ''],
+            $day + ['idsite' => 4, 'name' => 'done.Actions', 'report' => ' '],
+            $day + ['idsite' => 5, 'name' => 'done.Actions', 'report' => 'Actions_hits', 'status' => 1, 'ts_started' => '2020-01-11 00:00:00'],
+            $day + ['idsite' => 6, 'name' => 'done.Actions', 'report' => 'Actions_hits', 'ts_invalidated' => '2030-01-02 00:00:00'],
+        ]);
+
+        $this->assertEqualsCanonicalizing([1, 4], $this->model->getSitesWithSingleReportInvalidations('2030-01-01 00:00:00'));
+    }
+
+    /**
+     * A report of spaces is a single report also in collations that ignore trailing spaces, as in ArchiveFilter.
+     *
+     * @dataProvider getSingleReportInvalidations
+     */
+    public function testGetNextInvalidatedArchiveFiltersSingleReportInvalidations(bool $singleReportInvalidations, array $expectedIdInvalidations)
+    {
+        Fixture::createWebsite('2014-01-01 00:00:00');
+
+        $day = ['date1' => '2020-01-10', 'date2' => '2020-01-10', 'period' => Day::PERIOD_ID, 'name' => 'done.Actions'];
+        $this->insertInvalidations([
+            $day + ['report' => null],
+            $day + ['report' => ''],
+            $day + ['report' => ' '],
+            $day + ['report' => 'Actions_hits'],
+        ]);
+
+        $archiveFilter = new ArchiveFilter();
+        $archiveFilter->setSingleReportInvalidations($singleReportInvalidations);
+
+        $invalidations = $this->model->getNextInvalidatedArchive(1, '2030-01-01 00:00:00', null, false, $archiveFilter);
+        $this->assertEqualsCanonicalizing($expectedIdInvalidations, array_column($invalidations, 'idinvalidation'));
+        foreach ($invalidations as $invalidation) {
+            $this->assertFalse($archiveFilter->filterArchive($invalidation));
+        }
+    }
+
+    public function getSingleReportInvalidations(): iterable
+    {
+        yield 'single reports' => [true, [3, 4]];
+        yield 'others' => [false, [1, 2]];
+    }
+
     public function testDeleteInvalidationsForDeletedSites()
     {
         Fixture::createWebsite('2014-01-01 00:00:00');

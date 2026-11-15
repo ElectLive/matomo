@@ -24,11 +24,13 @@ use Piwik\CronArchive;
 use Piwik\CronArchive\FixedSiteIds;
 use Piwik\CronArchive\QueueConsumer;
 use Piwik\CronArchive\SegmentArchiving;
+use Piwik\CronArchive\SharedSiteIds;
 use Piwik\DataAccess\ArchiveTableCreator;
 use Piwik\DataAccess\ArchiveWriter;
 use Piwik\DataAccess\Model;
 use Piwik\Date;
 use Piwik\Db;
+use Piwik\Option;
 use Piwik\Piwik;
 use Piwik\Plugins\SegmentEditor\API;
 use Piwik\Segment;
@@ -1162,11 +1164,6 @@ class QueueConsumerTest extends IntegrationTestCase
     }
 
     /**
-     * Runs a consumer until the site is done and returns the tags (idarchive) of the processed invalidations.
-     *
-     * @return int[]
-     */
-    /**
      * @dataProvider getMaxSitesToProcess
      */
     public function testSingleReportsAreProcessedAfterTheOtherInvalidationsOfAllSites(?int $maxSitesToProcess, array $expected)
@@ -1223,6 +1220,121 @@ class QueueConsumerTest extends IntegrationTestCase
         yield 'one site' => [1, [2, 1, 3]];
     }
 
+    /**
+     * Runs runs of core:archive one after the other, each with its own process's list of sites, as `SharedSiteIds`
+     * gives it: the rest of an earlier run's list, or a new one. A run stopped by --max-archives-to-process, a signal or
+     * maintenance mode leaves its unprocessed invalidations queued, as these stop before fetching the next archives.
+     *
+     * @dataProvider getRunsStoppedEarly
+     * @param array<array{0: int|null, 1: int|null, 2: int[]}> $runs the archive and website limits of each run, and
+     *                                                               the idarchive of the invalidations it processes
+     */
+    public function testTheSingleReportsOfEverySiteAreProcessedByTheNextRunThatGetsToThem(array $runs)
+    {
+        if (!SharedSiteIds::isSupported()) {
+            $this->markTestSkipped('SharedSiteIds is not supported');
+        }
+
+        foreach ([1, 2, 3] as $idSite) {
+            Fixture::createWebsite('2015-02-03');
+        }
+
+        $this->insertInvalidations([
+            ['idarchive' => 1, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-08', 'date2' => '2018-03-08', 'period' => Day::PERIOD_ID, 'report' => 'Actions_hits'],
+            ['idarchive' => 2, 'name' => 'done', 'idsite' => 1, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => null],
+            ['idarchive' => 3, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-01', 'date2' => '2018-03-31', 'period' => Month::PERIOD_ID, 'report' => 'Actions_hits'],
+            ['idarchive' => 4, 'name' => 'done', 'idsite' => 2, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => null],
+            ['idarchive' => 5, 'name' => 'done.Transitions', 'idsite' => 2, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => 'Transitions_1_pageviews'],
+            ['idarchive' => 6, 'name' => 'done.Actions', 'idsite' => 3, 'date1' => '2018-03-06', 'date2' => '2018-03-06', 'period' => Day::PERIOD_ID, 'report' => null],
+        ]);
+
+        $optionName = 'SharedSiteIdsToArchive_QueueConsumerTest';
+        try {
+            foreach ($runs as $index => [$maxArchives, $maxSites, $expected]) {
+                $cronArchive = $this->getMockCronArchive();
+                $cronArchive->init();
+
+                $queueConsumer = new QueueConsumer(
+                    new NullLogger(),
+                    new SharedSiteIds([1, 2, 3], $optionName),
+                    1,
+                    24,
+                    new Model(),
+                    new SegmentArchiving(),
+                    $cronArchive,
+                    $this->makeTestArchiveFilter()
+                );
+                $queueConsumer->setMaxSitesToProcess($maxSites);
+                // as core:archive does, the sites of the run
+                $queueConsumer->setSiteIdsToArchive([1, 2, 3]);
+
+                $this->assertSame($expected, $this->consumeInvalidations($queueConsumer, $maxArchives), "run $index");
+            }
+        } finally {
+            Option::delete($optionName);
+            Option::delete($optionName . SharedSiteIds::KEY_TIMESTAMP);
+        }
+
+        $this->assertEquals(0, Db::fetchOne('SELECT COUNT(*) FROM ' . Common::prefixTable('archive_invalidations')));
+    }
+
+    public function getRunsStoppedEarly(): iterable
+    {
+        yield 'archive limit' => [[
+            // stopped within the first site: the second run continues the list with the second site
+            [1, null, [2]],
+            // reaches the end of the list, so processes the single reports of all sites, until it is stopped
+            [3, null, [4, 6, 1]],
+            // a new list
+            [null, null, [3, 5]],
+        ]];
+
+        yield 'website limit' => [[
+            [null, 1, [2, 1, 3]],
+            [null, 1, [4, 5]],
+            [null, 1, [6]],
+        ]];
+
+        yield 'website limit, single reports of the sites processed earlier' => [[
+            [1, null, [2]],
+            [null, 1, [4, 1, 3]],
+            [null, 1, [6, 5]],
+        ]];
+    }
+
+    /**
+     * Fetches archives as core:archive does, finishing each before the next fetch, until no site is left or the limit
+     * of archives is reached.
+     *
+     * @return int[] the idarchive of the processed invalidations
+     */
+    private function consumeInvalidations(QueueConsumer $queueConsumer, ?int $maxArchives): array
+    {
+        $processed = [];
+        for ($i = 0; $i < 100; $i++) {
+            $next = $queueConsumer->getNextArchivesToProcess();
+            if ($next === null) {
+                return $processed;
+            }
+
+            foreach ($next as $item) {
+                $processed[] = (int) $item['idarchive'];
+                Db::query('DELETE FROM ' . Common::prefixTable('archive_invalidations') . ' WHERE idinvalidation = ?', [$item['idinvalidation']]);
+            }
+
+            if ($maxArchives && count($processed) >= $maxArchives) {
+                return $processed;
+            }
+        }
+
+        $this->fail('Consumer did not finish');
+    }
+
+    /**
+     * Runs a consumer until the site is done and returns the tags (idarchive) of the processed invalidations.
+     *
+     * @return int[]
+     */
     private function consumeAllInvalidations(Model $model, CronArchive\ArchiveFilter $archiveFilter): array
     {
         $cronArchive = $this->getMockCronArchive();

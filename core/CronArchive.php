@@ -433,6 +433,7 @@ class CronArchive
         );
 
         $queueConsumer->setMaxSitesToProcess($this->maxSitesToProcess);
+        $queueConsumer->setSiteIdsToArchive($this->allWebsites);
 
         while (true) {
             if (null !== $this->signal) {

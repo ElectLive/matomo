@@ -84,14 +84,31 @@ class QueueConsumer
     private $processedSiteCount = 0;
 
     /**
-     * Invalidations of a single report, like a report archived again for past periods, are processed once every site's
-     * other invalidations are, so they never delay those, nor use up the run's limits before them.
+     * Invalidations of a single report, like a report archived again for past periods, are processed after the other
+     * invalidations of every site of the run, so they never delay those, nor use up the run's limits before them.
+     * Their sites are read from the queue then, so the first run that gets that far processes those of every site of
+     * its list, also of sites whose other invalidations an earlier run processed before it stopped.
      *
-     * @var array<int, string> the archiving start time by site whose single report invalidations are left
+     * @var int[]|null the sites whose single report invalidations are left, null until they are read
      */
-    private $sitesWithSingleReportInvalidations = [];
+    private $sitesWithSingleReportInvalidations = null;
 
-    private $isProcessingSingleReportInvalidations = false;
+    /**
+     * @var string the time single report invalidations are processed from; later ones are left to the next run
+     */
+    private $singleReportInvalidationsStartTime;
+
+    private $processedSingleReportSiteCount = 0;
+
+    /**
+     * @var int[]|null
+     */
+    private $siteIdsToArchive = null;
+
+    /**
+     * false with --force-report, which leaves only single report invalidations to process
+     */
+    private bool $isDeferringSingleReportInvalidations;
 
     private ArchiveFilter $filterOfOtherInvalidations;
 
@@ -115,9 +132,12 @@ class QueueConsumer
         $this->segmentArchiving = $segmentArchiving;
         $this->cronArchive = $cronArchive;
         $this->filterOfOtherInvalidations = $archiveFilter ? clone $archiveFilter : new ArchiveFilter();
-        $this->filterOfOtherInvalidations->setSingleReportInvalidations(false);
+        $this->isDeferringSingleReportInvalidations = $this->filterOfOtherInvalidations->getForceReport() === null;
         $this->filterOfSingleReportInvalidations = clone $this->filterOfOtherInvalidations;
         $this->filterOfSingleReportInvalidations->setSingleReportInvalidations(true);
+        if ($this->isDeferringSingleReportInvalidations) {
+            $this->filterOfOtherInvalidations->setSingleReportInvalidations(false);
+        }
 
         // if we skip or can't process an idarchive, we want to ignore it the next time we look for an invalidated
         // archive. these IDs are stored here (using a list like this serves to keep our SQL simple).
@@ -138,7 +158,7 @@ class QueueConsumer
     public function getNextArchivesToProcess()
     {
         $isNextSite = false;
-        if (empty($this->idSite) && !$this->isProcessingSingleReportInvalidations) {
+        if (empty($this->idSite) && !$this->isProcessingSingleReportInvalidations()) {
             if ($this->maxSitesToProcess && $this->processedSiteCount >= $this->maxSitesToProcess) {
                 $this->logger->info("Maximum number of sites to process per execution has been reached.");
             } else {
@@ -146,22 +166,19 @@ class QueueConsumer
                 $isNextSite = !empty($this->idSite);
             }
 
-            if (empty($this->idSite)) {
-                $this->isProcessingSingleReportInvalidations = true;
-                // none of them was fetched before
-                $this->invalidationsToExclude = [];
+            if (empty($this->idSite) && $this->isDeferringSingleReportInvalidations) {
+                $this->startProcessingSingleReportInvalidations();
             }
         }
 
         if (empty($this->idSite)) {
-            $this->idSite = array_key_first($this->sitesWithSingleReportInvalidations);
+            $this->idSite = $this->getNextSiteWithSingleReportInvalidations();
             if (empty($this->idSite)) { // no sites left to archive, stop
                 $this->logger->debug("No more sites left to archive, stopping.");
                 return null;
             }
 
-            $this->currentSiteArchivingStartTime = $this->sitesWithSingleReportInvalidations[$this->idSite];
-            unset($this->sitesWithSingleReportInvalidations[$this->idSite]);
+            $this->currentSiteArchivingStartTime = $this->singleReportInvalidationsStartTime;
 
             $this->logger->info("Start processing single report archives for site {idSite}.", ['idSite' => $this->idSite]);
 
@@ -309,7 +326,7 @@ class QueueConsumer
         if (
             empty($archivesToProcess)
             && empty($invalidationsToExcludeInBatch)
-            && $this->isProcessingSingleReportInvalidations
+            && $this->isProcessingSingleReportInvalidations()
         ) {
             $this->logger->info("Finished archiving single reports for site {idSite}, {requests} API requests, {timer}", [
                 'idSite' => $this->idSite,
@@ -317,18 +334,22 @@ class QueueConsumer
                 'requests' => $this->siteRequests,
             ]);
 
+            if ($this->siteRequests > 0) {
+                ++$this->processedSingleReportSiteCount;
+            }
+
             $this->idSite = null;
         } elseif (
             empty($archivesToProcess)
             && empty($invalidationsToExcludeInBatch)
         ) { // no invalidated archive left
-            if ($this->hasSingleReportInvalidations($this->idSite)) {
-                $this->sitesWithSingleReportInvalidations[$this->idSite] = $this->currentSiteArchivingStartTime;
-            }
-
             /**
              * This event is triggered immediately after the cron archiving process finishes archiving data for a single
              * site.
+             *
+             * Invalidations of a single report, like those of `ArchiveInvalidator::reArchiveReport()` with a report,
+             * are archived after this event, once the other invalidations of all sites are, and without these events,
+             * unless `--force-report` is used.
              *
              * Note: multiple archiving processes can post this event.
              *
@@ -424,18 +445,45 @@ class QueueConsumer
 
     private function getArchiveFilter(): ArchiveFilter
     {
-        return $this->isProcessingSingleReportInvalidations ? $this->filterOfSingleReportInvalidations : $this->filterOfOtherInvalidations;
+        return $this->isProcessingSingleReportInvalidations() ? $this->filterOfSingleReportInvalidations : $this->filterOfOtherInvalidations;
     }
 
-    private function hasSingleReportInvalidations(int $idSite): bool
+    private function isProcessingSingleReportInvalidations(): bool
     {
-        return !empty($this->model->getNextInvalidatedArchive(
-            $idSite,
-            $this->currentSiteArchivingStartTime,
-            null,
-            true,
-            $this->filterOfSingleReportInvalidations
-        ));
+        return $this->sitesWithSingleReportInvalidations !== null;
+    }
+
+    private function startProcessingSingleReportInvalidations(): void
+    {
+        $this->singleReportInvalidationsStartTime = Date::now()->getDatetime();
+        // none of them was fetched before
+        $this->invalidationsToExclude = [];
+
+        $idSites = $this->model->getSitesWithSingleReportInvalidations($this->singleReportInvalidationsStartTime);
+        $this->sitesWithSingleReportInvalidations = array_values(array_map('intval', array_intersect($this->getSiteIdsToArchive(), $idSites)));
+    }
+
+    private function getNextSiteWithSingleReportInvalidations(): ?int
+    {
+        if (!$this->isProcessingSingleReportInvalidations()) {
+            return null;
+        }
+
+        // only sites with archives processed count, so sites whose invalidations wait don't hold back the others
+        if ($this->maxSitesToProcess && $this->processedSingleReportSiteCount >= $this->maxSitesToProcess) {
+            $this->logger->info("Maximum number of sites to process single reports for per execution has been reached.");
+            return null;
+        }
+
+        return array_shift($this->sitesWithSingleReportInvalidations);
+    }
+
+    /**
+     * @return int[]|string[]
+     */
+    private function getSiteIdsToArchive(): array
+    {
+        return $this->siteIdsToArchive ?? $this->websiteIdArchiveList->getInitialSiteIds();
     }
 
     public function shouldSkipArchiveBecauseLowerPeriodOrSegmentIsInProgress(array $archiveToProcess): ?string
@@ -667,5 +715,15 @@ class QueueConsumer
             $this->maxSitesToProcess = $newValue;
         }
         return $this->maxSitesToProcess;
+    }
+
+    /**
+     * Sets all sites of the run, in their order, also those an earlier process took from a shared list.
+     *
+     * @param int[]|string[] $idSites
+     */
+    public function setSiteIdsToArchive(array $idSites): void
+    {
+        $this->siteIdsToArchive = array_values($idSites);
     }
 }
