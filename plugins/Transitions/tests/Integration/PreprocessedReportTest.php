@@ -20,6 +20,7 @@ use Piwik\Config;
 use Piwik\Container\StaticContainer;
 use Piwik\DataAccess\RawLogDao;
 use Piwik\DataTable;
+use Piwik\Date;
 use Piwik\Db;
 use Piwik\EventDispatcher;
 use Piwik\Log\LoggerInterface;
@@ -27,6 +28,7 @@ use Piwik\NoAccessException;
 use Piwik\Option;
 use Piwik\Plugins\Overlay\API as OverlayAPI;
 use Piwik\Plugins\PrivacyManager\ReportsPurger;
+use Piwik\Plugins\SegmentEditor\API as SegmentEditorAPI;
 use Piwik\Plugins\SitesManager\API as SitesManagerAPI;
 use Piwik\Plugins\Transitions\API;
 use Piwik\Plugins\Transitions\PreprocessedPages\Dao;
@@ -127,10 +129,17 @@ class PreprocessedReportTest extends IntegrationTestCase
      */
     public function testStoredDataOfAPreProcessedSegmentEqualsTheLogQuery(string $period, string $date): void
     {
+        $this->addPreProcessedSegment();
         $raw = $this->request($period, $date, self::SEGMENT);
 
         $idPage = $this->selectPage(self::PAGE_URL);
-        $this->archive($idPage, $period, $date, self::SEGMENT);
+        // archived as core:archive does, after the period
+        Date::$now = strtotime('2010-04-01 12:00:00 UTC');
+        try {
+            $this->archive($idPage, $period, $date, self::SEGMENT);
+        } finally {
+            Date::$now = null;
+        }
 
         $stored = $this->request($period, $date, self::SEGMENT);
         $this->assertStoredEqualsRaw($raw, $stored);
@@ -1149,6 +1158,21 @@ class PreprocessedReportTest extends IntegrationTestCase
     /**
      * Archives the period as browser archiving does, with the page's records and the visits.
      */
+    private function addPreProcessedSegment(): void
+    {
+        // a segment can only be pre-processed with cron archiving
+        $general = Config::getInstance()->General;
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 0;
+        Config::getInstance()->General['browser_archiving_disabled_enforce'] = 1;
+        try {
+            SegmentEditorAPI::getInstance()->add('website', self::SEGMENT, 1, true);
+        } finally {
+            Config::getInstance()->General = $general;
+        }
+        Cache::getTransientCache()->flushAll();
+        Cache::getEagerCache()->flushAll();
+    }
+
     private function archive(int $idPage, string $period, string $date, string $segment = ''): void
     {
         Cache::getTransientCache()->flushAll();

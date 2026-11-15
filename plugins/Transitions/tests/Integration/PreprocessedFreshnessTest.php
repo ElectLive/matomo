@@ -1156,7 +1156,7 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
 
     private function insertPartialArchive(int $idSite, int $periodId, string $date1, string $date2, string $segment): void
     {
-        $table = ArchiveTableCreator::getNumericTable(Date::factory($date1));
+        $table = ArchiveTableCreator::getNumericTable(Date::factory($date1), true);
         $idArchive = (int) Db::fetchOne('SELECT COALESCE(MAX(idarchive), 0) + 1 FROM ' . $table);
         Db::query(
             'INSERT INTO ' . $table . ' (idarchive, idsite, date1, date2, period, ts_archived, name, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -1167,7 +1167,7 @@ class PreprocessedFreshnessTest extends IntegrationTestCase
     private function countPartialArchivesOf(int $idSite, int $periodId, string $date1, string $segment): int
     {
         return (int) Db::fetchOne(
-            'SELECT COUNT(*) FROM ' . ArchiveTableCreator::getNumericTable(Date::factory($date1)) . ' WHERE idsite = ? AND period = ? AND date1 = ? AND name = ? AND value = ?',
+            'SELECT COUNT(*) FROM ' . ArchiveTableCreator::getNumericTable(Date::factory($date1), true) . ' WHERE idsite = ? AND period = ? AND date1 = ? AND name = ? AND value = ?',
             [$idSite, $periodId, $date1, $this->getPartialDoneFlag($idSite, $segment), ArchiveWriter::DONE_PARTIAL]
         );
     }
