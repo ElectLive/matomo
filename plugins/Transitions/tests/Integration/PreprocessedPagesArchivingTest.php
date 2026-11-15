@@ -105,11 +105,12 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
 
     public function testDayRecordsEqualTheRawLogQueryForMorePagesThanOneQueryTakes(): void
     {
-        // one visit through 17 pages, more than each query takes at once
+        // one visit through 22 pages, more than each query and the day's queries take at once
+        Config::setSetting('Transitions', 'max_preprocessed_pages', 30);
         $pageUrls = [];
         $tracker = Fixture::getTracker(1, self::DAY . ' 15:00:00', $defaultInit = true);
         $tracker->setUrlReferrer('http://a.example/x');
-        for ($i = 0; $i < 17; $i++) {
+        for ($i = 0; $i < 22; $i++) {
             $pageUrls[$i] = 'http://example.org/many/' . $i . '.html';
             $tracker->setForceVisitDateTime(Date::factory(self::DAY . ' 15:00:00')->addPeriod($i, 'minute')->getDatetime());
             $tracker->setUrl($pageUrls[$i]);
@@ -121,7 +122,7 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
             $idPages[$i] = $this->selectPage($pageUrl);
         }
 
-        foreach ([0, 8, 12, 16] as $i) {
+        foreach ([0, 8, 12, 16, 19, 20, 21] as $i) {
             self::assertSame($this->getRawReport('day', self::DAY, '', $pageUrls[$i]), $this->getStoredReport($idPages[$i], 'day', self::DAY), $pageUrls[$i]);
         }
     }
@@ -702,11 +703,6 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
         ksort($counts);
 
         return $counts;
-    }
-
-    private function getTotal(DataTable $table, int $column): int
-    {
-        return array_sum($this->getCounts($table, $column));
     }
 
     /**

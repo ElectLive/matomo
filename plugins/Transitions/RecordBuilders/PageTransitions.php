@@ -35,6 +35,12 @@ use Piwik\Tracker\Action;
 class PageTransitions extends RecordBuilder
 {
     /**
+     * The most URLs whose lists the log queries of a day rank at once: the default page limit, so a website within it
+     * is queried once.
+     */
+    private const PAGES_PER_QUERY = Service::DEFAULT_MAX_PAGES;
+
+    /**
      * MAX_EXECUTION_TIME of the log queries in seconds, none if not positive.
      */
     private static float $timeLimit = -1;
@@ -199,41 +205,92 @@ class PageTransitions extends RecordBuilder
         return $daysWithVisits;
     }
 
+    /**
+     * The log queries run for at most {@link PAGES_PER_QUERY} URLs at once, and each page's lists are written and freed
+     * before the next page's are built, so the memory used is bounded by the query results of that many URLs and the
+     * lists of one page, whatever the number of pages.
+     */
     protected function aggregate(ArchiveProcessor $archiveProcessor): array
     {
         $idSite = $this->getIdSite($archiveProcessor);
+        $maxRows = Records::getMaxRows($idSite);
         $idActionsByPage = StaticContainer::get(Service::class)->getIdActionsByPage($idSite, $this->getIdPagesToBuild($archiveProcessor));
-        // pages with the same URL action are queried once
-        $idActions = array_values(array_unique(array_filter($idActionsByPage, 'is_int')));
 
         // a website can be archived without visits
         $hasVisits = $archiveProcessor->getNumberOfVisits() > 0;
 
-        $internalReferrers = $followingActions = $externalReferrers = [];
-        if (!empty($idActions)) {
-            $maxRows = Records::getMaxRows($idSite);
-            $logAggregator = $archiveProcessor->getLogAggregator();
-            $model = StaticContainer::get(Model::class);
+        // a URL that isn't tracked, or whose action was deleted as unused, had no pageviews
+        $idPagesByIdAction = [0 => []];
+        foreach ($idActionsByPage as $idPage => $idAction) {
+            $idPagesByIdAction[$idAction ?? 0][] = $idPage;
+        }
 
+        $numericRecords = [Records::DAYS_WITH_VISITS => $hasVisits ? 1 : 0];
+        foreach ($idPagesByIdAction[0] as $idPage) {
+            $numericRecords += $this->insertPageRecords($archiveProcessor, $idPage, $this->makePageRecords($idPage, [], [], [], $hasVisits), $maxRows);
+        }
+        unset($idPagesByIdAction[0]);
+
+        $logAggregator = $archiveProcessor->getLogAggregator();
+        $model = StaticContainer::get(Model::class);
+        // pages with the same URL action are queried once
+        foreach (array_chunk($idPagesByIdAction, self::PAGES_PER_QUERY, true) as $chunk) {
+            $idActions = array_keys($chunk);
             $internalReferrers = $model->queryInternalReferrersOfPages($logAggregator, $idActions, $maxRows, RankingQuery::LABEL_SUMMARY_ROW, self::$timeLimit);
             // reloads are counted in loops, not as following pages
             $followingActions = $model->queryFollowingActionsOfPages($logAggregator, $idActions, $maxRows, RankingQuery::LABEL_SUMMARY_ROW, self::$timeLimit);
             $externalReferrers = $model->queryExternalReferrersOfPages($logAggregator, $idActions, $maxRows, RankingQuery::LABEL_SUMMARY_ROW, self::$timeLimit);
+
+            foreach ($chunk as $idAction => $idPages) {
+                foreach ($idPages as $idPage) {
+                    $numericRecords += $this->insertPageRecords($archiveProcessor, $idPage, $this->makePageRecords(
+                        $idPage,
+                        $this->toArray($internalReferrers[$idAction] ?? []),
+                        $this->toArray($followingActions[$idAction] ?? []),
+                        $this->toArray($externalReferrers[$idAction] ?? []),
+                        $hasVisits
+                    ), $maxRows);
+                }
+                unset($internalReferrers[$idAction], $followingActions[$idAction], $externalReferrers[$idAction]);
+            }
         }
 
-        $records = [Records::DAYS_WITH_VISITS => $hasVisits ? 1 : 0];
-        foreach ($idActionsByPage as $idPage => $idAction) {
-            // a URL that isn't tracked, or whose action was deleted as unused, had no pageviews
-            $records = array_merge($records, $this->makePageRecords(
-                $idPage,
-                $idAction === null ? [] : $this->toArray($internalReferrers[$idAction] ?? []),
-                $idAction === null ? [] : $this->toArray($followingActions[$idAction] ?? []),
-                $idAction === null ? [] : $this->toArray($externalReferrers[$idAction] ?? []),
-                $hasVisits
-            ));
+        return $numericRecords;
+    }
+
+    /**
+     * Writes the page's lists to the archive and frees them, as {@link buildFromLogs()} would.
+     *
+     * @param array<string, DataTable|int> $records
+     * @return array<string, int> the numeric records, written with the others
+     */
+    private function insertPageRecords(ArchiveProcessor $archiveProcessor, int $idPage, array $records, int $maxRows): array
+    {
+        $metadata = [];
+        foreach ($this->getPageRecords($idPage, $maxRows) as $record) {
+            $metadata[$record->getName()] = $record;
         }
 
-        return $records;
+        $numericRecords = [];
+        foreach ($records as $name => $value) {
+            if (!$value instanceof DataTable) {
+                $numericRecords[$name] = $value;
+                continue;
+            }
+
+            $record = $metadata[$name];
+            $this->insertBlobRecord(
+                $archiveProcessor,
+                $name,
+                $value,
+                $record->getMaxRowsInTable(),
+                $record->getMaxRowsInSubtable(),
+                (string) $record->getColumnToSortByBeforeTruncation()
+            );
+            Common::destroy($value);
+        }
+
+        return $numericRecords;
     }
 
     /**
