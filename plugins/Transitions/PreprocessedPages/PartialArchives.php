@@ -95,8 +95,8 @@ final class PartialArchives
     /**
      * Marks the partial archives of the periods and segments that have an invalidated archive, as core invalidates
      * archives without telling this plugin while it is deactivated, see
-     * {@link \Piwik\Plugins\Transitions\Transitions::activate()}. Those built after the invalidation are marked too, and
-     * are built again like the others.
+     * {@link \Piwik\Plugins\Transitions\Transitions::activate()}. Those built after the invalidation are marked
+     * too, and are built again like the others.
      */
     public function invalidateWhereArchivesAreInvalidated(): void
     {

@@ -946,7 +946,8 @@ class Model
     }
 
     /**
-     * Returns the sites with invalidations of a single report left to process, see ArchiveFilter::setSingleReportInvalidations().
+     * Returns the sites with invalidations of a single report left to process, see
+     * ArchiveFilter::setSingleReportInvalidations().
      *
      * @return int[]
      */
