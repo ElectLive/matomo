@@ -1303,6 +1303,46 @@ class QueueConsumerTest extends IntegrationTestCase
     }
 
     /**
+     * The archive of a period with today built for all plugins before a single report's days were archived again
+     * holds the report's previous data of these days.
+     */
+    public function testASingleReportOfAPeriodWithTodayIsArchivedAgainAlthoughARecentArchiveExists()
+    {
+        Fixture::createWebsite('2015-02-03');
+
+        // force archiving so we don't skip those without visits
+        Piwik::addAction('Archiving.getIdSitesToArchiveWhenNoVisits', function (&$idSites) {
+            $idSites[] = 1;
+        });
+
+        $cronArchive = $this->getMockCronArchive();
+        $cronArchive->init();
+
+        Date::$now = strtotime('2018-03-04 01:00:00');
+
+        $this->insertInvalidations([
+            ['idarchive' => 1, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-04', 'date2' => '2018-03-04', 'period' => Day::PERIOD_ID, 'report' => null],
+            ['idarchive' => 2, 'name' => 'done.Actions', 'idsite' => 1, 'date1' => '2018-03-04', 'date2' => '2018-03-04', 'period' => Day::PERIOD_ID, 'report' => 'Actions_hits'],
+        ]);
+        $this->insertArchive(['idarchive' => 1, 'name' => 'done', 'idsite' => 1, 'date1' => '2018-03-04', 'date2' => '2018-03-04', 'period' => Day::PERIOD_ID, 'ts_archived' => Date::now()->getDatetime(), 'value' => 3.0]);
+
+        $queueConsumer = new QueueConsumer(
+            new NullLogger(),
+            new FixedSiteIds([1]),
+            3,
+            24,
+            new Model(),
+            new SegmentArchiving(),
+            $cronArchive,
+            $this->makeTestArchiveFilter()
+        );
+
+        // the plugin's invalidation is deleted, as before
+        $this->assertSame([2], $this->consumeInvalidations($queueConsumer, null));
+        $this->assertEquals(0, Db::fetchOne('SELECT COUNT(*) FROM ' . Common::prefixTable('archive_invalidations')));
+    }
+
+    /**
      * Fetches archives as core:archive does, finishing each before the next fetch, until no site is left or the limit
      * of archives is reached.
      *

@@ -273,7 +273,11 @@ class QueueConsumer
                 continue;
             }
 
-            [$isUsableExists, $archivedTime] = $this->usableArchiveExists($invalidatedArchive);
+            // a single report's archive of a period with today is built again, as the recent archive of the period
+            // may have been built from that report's previous data of its days
+            [$isUsableExists, $archivedTime] = empty($invalidatedArchive['report'])
+                ? $this->usableArchiveExists($invalidatedArchive)
+                : [false, null];
             if ($isUsableExists) {
                 $now = Date::now()->getDatetime();
                 $this->addInvalidationToExclude($invalidatedArchive);
