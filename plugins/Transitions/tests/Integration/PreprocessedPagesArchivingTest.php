@@ -497,6 +497,21 @@ class PreprocessedPagesArchivingTest extends IntegrationTestCase
         }
     }
 
+    public function testArchivingADayAgainBuildsOnlyTheRemovedPagesWhoseRecordsItHolds(): void
+    {
+        $idPage = $this->selectPage(self::PAGE_URL);
+        $this->archive('day', self::DAY);
+        // selected and removed while the day wasn't archived
+        $otherIdPage = $this->selectPage(self::OTHER_PAGE_URL);
+        StaticContainer::get(Service::class)->removePage(1, $otherIdPage);
+        StaticContainer::get(Service::class)->removePage(1, $idPage);
+
+        StaticContainer::get(ArchiveInvalidator::class)->markArchivesAsInvalidated([1], [Date::factory(self::DAY)], 'day');
+        $this->archive('day', self::DAY);
+
+        self::assertSame($this->getExpectedRecordNames($idPage), $this->getStoredRecordNames(1, self::DAY, $this->getLatestIdArchive(1, self::DAY)));
+    }
+
     private function getLatestIdArchive(int $periodId, string $date1): int
     {
         return (int) Db::fetchOne(

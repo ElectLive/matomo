@@ -25,6 +25,7 @@ use Piwik\Period\Range;
 use Piwik\Plugins\Transitions\Model;
 use Piwik\Plugins\Transitions\PreprocessedPages\Records;
 use Piwik\Plugins\Transitions\PreprocessedPages\Service;
+use Piwik\Plugins\Transitions\PreprocessedPages\StoredRecordsReader;
 use Piwik\RankingQuery;
 use Piwik\Tracker\Action;
 
@@ -459,8 +460,10 @@ class PageTransitions extends RecordBuilder
 
     /**
      * The selected pages of the website that aren't removed, plus those removed since the period started, once per
-     * archive: archiving a period again, a day too, keeps the records of the removed pages' days. A day whose logs were
-     * deleted is archived without any records by core anyway.
+     * archive: archiving a period again, a day too, keeps the records of the removed pages' days. A day builds a
+     * removed page only if the day's current archives hold its records, as each page costs log queries. A day whose
+     * logs were deleted is archived without any records by core anyway. An archive of single pages, which are never
+     * removed ones, builds no removed page.
      *
      * @return list<int>
      */
@@ -471,10 +474,20 @@ class PageTransitions extends RecordBuilder
             $service = StaticContainer::get(Service::class);
             $params = $archiveProcessor->getParams();
 
-            $this->idPagesByArchive[$archiveProcessor] = array_values(array_unique(array_merge(
-                $service->getPageIds($idSite),
-                $service->getPageIdsRemovedSince($idSite, $params->getDateTimeStart())
-            )));
+            $removedIdPages = [];
+            if (empty($params->getArchiveOnlyReportAsArray())) {
+                $removedIdPages = $service->getPageIdsRemovedSince($idSite, $params->getDateTimeStart());
+            }
+            if (!empty($removedIdPages) && $params->getPeriod()->getLabel() === 'day') {
+                $removedIdPages = StaticContainer::get(StoredRecordsReader::class)->getPagesWithRecords(
+                    $idSite,
+                    $params->getPeriod(),
+                    $params->getSegment(),
+                    $removedIdPages
+                );
+            }
+
+            $this->idPagesByArchive[$archiveProcessor] = array_values(array_unique(array_merge($service->getPageIds($idSite), $removedIdPages)));
         }
 
         return $this->idPagesByArchive[$archiveProcessor];

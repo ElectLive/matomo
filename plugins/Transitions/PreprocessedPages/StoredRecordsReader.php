@@ -120,6 +120,34 @@ final class StoredRecordsReader
     }
 
     /**
+     * Returns which of the pages have records of the period in its archives, also invalidated ones. The archives of a
+     * period hold the records of every page they were built for with a positive `days` counter, as periods without
+     * visits aren't archived.
+     *
+     * @param list<int> $idPages
+     * @return list<int>
+     */
+    public function getPagesWithRecords(int $idSite, Period $period, Segment $segment, array $idPages): array
+    {
+        $names = [];
+        foreach ($idPages as $idPage) {
+            $names[$idPage] = Records::getRecordName($idPage, Records::DAYS);
+        }
+
+        try {
+            $archive = $this->buildArchive($idSite, [$period], $segment);
+            $rows = $archive === null ? [] : $this->getNumericRows($archive, array_values($names));
+        } catch (UnprocessedSegmentException $e) {
+            $rows = [];
+        }
+
+        $row = $rows[$period->getRangeString()] ?? [];
+
+        // a page without records gets the default value 0
+        return array_values(array_filter($idPages, fn(int $idPage): bool => is_numeric($row[$names[$idPage]] ?? null) && $row[$names[$idPage]] > 0));
+    }
+
+    /**
      * @param list<Period> $periods
      * @param list<string> $tableParts
      */
