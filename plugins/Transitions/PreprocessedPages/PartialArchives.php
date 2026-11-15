@@ -34,7 +34,8 @@ use Piwik\Segment;
  * until the period is archived again, which also builds the removed pages they hold records of. An invalidation core
  * only remembers, like that of a data subject's deleted visits, marks them once core applies it. Until then they are
  * served like core's own archives, and they stay like those if core skips it, as the logs of the day were deleted
- * meanwhile.
+ * meanwhile. A period archived again after its logs were deleted gets an archive without visits, which replaces them
+ * as it replaces core's archives.
  */
 final class PartialArchives
 {
