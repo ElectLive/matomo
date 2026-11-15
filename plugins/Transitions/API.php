@@ -553,7 +553,8 @@ class API extends \Piwik\Plugin\API
      * @throws \Piwik\Http\BadRequestException (400) for an invalid or too long URL, a page that is already
      *                                           selected, and when the website's limit of pages is reached
      * @throws \Piwik\Plugins\Transitions\PreprocessedPages\PreprocessedPagesBusyException (409) while another page
-     *                                                                                    is added to the website
+     *                                                                                    of the website is added or
+     *                                                                                    removed
      */
     public function addPreprocessedPage(int $idSite, string $pageUrl): array
     {
@@ -569,6 +570,9 @@ class API extends \Piwik\Plugin\API
      *
      * @param int $idSite The numeric ID of the website.
      * @param int $idPage The ID of the page, as returned by `getPreprocessedPages`.
+     * @throws \Piwik\Plugins\Transitions\PreprocessedPages\PreprocessedPagesBusyException (409) while another page
+     *                                                                                    of the website is added or
+     *                                                                                    removed
      */
     public function removePreprocessedPage(int $idSite, int $idPage): void
     {

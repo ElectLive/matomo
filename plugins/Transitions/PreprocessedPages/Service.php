@@ -46,6 +46,11 @@ class Service
 
     public const LOCK_NAMESPACE = 'Transitions.addPreprocessedPage';
 
+    /**
+     * Key of the lock on the scheduled rebuilds in {@link LOCK_NAMESPACE}, beside the websites' ids.
+     */
+    private const REARCHIVE_LIST_LOCK_KEY = 'reArchiveList';
+
     private const NON_USER_LOGINS = ['anonymous', 'super user was set'];
 
     private Dao $dao;
@@ -88,9 +93,9 @@ class Service
         $login = Piwik::getCurrentUserLogin();
         $createdBy = in_array($login, self::NON_USER_LOGINS, true) ? null : $login;
 
-        // concurrent adds must not both pass the limit check
-        $lock = new Lock($this->lockBackend, self::LOCK_NAMESPACE);
-        $this->acquireLock($lock, $idSite);
+        // concurrent adds must not both pass the limit check, and a removal must not run between the write and the
+        // scheduled rebuild
+        $locks = $this->lockPages($idSite);
 
         try {
             $existing = $this->dao->getPageByUrlHash($idSite, $urlHash);
@@ -115,23 +120,23 @@ class Service
                 $this->dao->deletePagesForSite($idSite);
                 throw new UnexpectedWebsiteFoundException('The requested website id = ' . $idSite . ' couldn\'t be found');
             }
-        } finally {
-            $lock->unlock();
-        }
 
-        $page = $this->dao->getPageByUrlHash($idSite, $urlHash);
-        if ($page === null) {
-            throw new \Exception('The added page could not be read back.');
+            $page = $this->dao->getPageByUrlHash($idSite, $urlHash);
+            if ($page === null) {
+                throw new \Exception('The added page could not be read back.');
+            }
+
+            // also for a URL not tracked yet, whose days then hold zero records, and for a removed page added again,
+            // which archiving skipped meanwhile
+            $this->invalidator->scheduleReArchiving([$idSite], 'Transitions', Records::getRebuildReportName($page['idpage']));
+        } finally {
+            $this->unlock($locks);
         }
 
         // the user may have been deleted while this waited for the lock, and the deletion cleaned up before the write
         if ($page['created_by'] !== null && $this->dao->clearCreatedByOfDeletedUser($page['idpage'])) {
             $page['created_by'] = null;
         }
-
-        // also for a URL not tracked yet, whose days then hold zero records, and for a removed page added again, which
-        // archiving skipped meanwhile
-        $this->invalidator->scheduleReArchiving([$idSite], 'Transitions', Records::getRebuildReportName($page['idpage']));
 
         return $this->toEntry($page, $this->getSuperUserLogins($page['created_by'] === null ? [] : [$page['created_by']]));
     }
@@ -141,15 +146,54 @@ class Service
      */
     public function removePage(int $idSite, int $idPage): void
     {
-        $page = $this->dao->getPage($idSite, $idPage);
-        if ($page === null) {
-            throw new ThingNotFoundException(Piwik::translate('Transitions_PreprocessedPageNotSelected'));
+        $locks = $this->lockPages($idSite);
+
+        try {
+            $page = $this->dao->getPage($idSite, $idPage);
+            if ($page === null) {
+                throw new ThingNotFoundException(Piwik::translate('Transitions_PreprocessedPageNotSelected'));
+            }
+
+            // the row is kept, so the page's stored records stay readable by URL
+            $this->dao->removePage($idSite, $idPage, Date::now()->getDatetime());
+
+            $this->invalidator->removeInvalidationsSafely([$idSite], 'Transitions', Records::getRebuildReportName($idPage));
+        } finally {
+            $this->unlock($locks);
+        }
+    }
+
+    /**
+     * Locks the website's pages, then the scheduled rebuilds: core rewrites the whole list of them on every change, so
+     * the changes for different websites are made one at a time too. `core:archive` applies the list without a lock,
+     * which can still drop a change made at that moment.
+     *
+     * @return list<Lock>
+     */
+    private function lockPages(int $idSite): array
+    {
+        $siteLock = new Lock($this->lockBackend, self::LOCK_NAMESPACE);
+        $this->acquireLock($siteLock, (string) $idSite);
+
+        $listLock = new Lock($this->lockBackend, self::LOCK_NAMESPACE);
+        try {
+            $this->acquireLock($listLock, self::REARCHIVE_LIST_LOCK_KEY);
+        } catch (\Throwable $e) {
+            $siteLock->unlock();
+            throw $e;
         }
 
-        // the row is kept, so the page's stored records stay readable by URL
-        $this->dao->removePage($idSite, $idPage, Date::now()->getDatetime());
+        return [$siteLock, $listLock];
+    }
 
-        $this->invalidator->removeInvalidationsSafely([$idSite], 'Transitions', Records::getRebuildReportName($idPage));
+    /**
+     * @param list<Lock> $locks
+     */
+    private function unlock(array $locks): void
+    {
+        foreach (array_reverse($locks) as $lock) {
+            $lock->unlock();
+        }
     }
 
     /**
@@ -367,9 +411,9 @@ class Service
     /**
      * Waits up to 5 seconds, as `Lock::execute()` does.
      */
-    private function acquireLock(Lock $lock, int $idSite): void
+    private function acquireLock(Lock $lock, string $key): void
     {
-        for ($attempt = 0; !$lock->acquireLock((string) $idSite); $attempt++) {
+        for ($attempt = 0; !$lock->acquireLock($key); $attempt++) {
             if ($attempt >= 50) {
                 throw new PreprocessedPagesBusyException();
             }

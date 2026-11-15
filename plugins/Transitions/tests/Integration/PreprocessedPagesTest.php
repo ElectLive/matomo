@@ -458,6 +458,46 @@ class PreprocessedPagesTest extends IntegrationTestCase
         self::assertSame(['https://example.com/a'], $this->getUrls(1));
     }
 
+    public function testRemovingWaitsForTheSiteLockAndFailsWithoutRemovingWhenItIsNotReleased(): void
+    {
+        $idPage = $this->api->addPreprocessedPage(1, 'https://example.com/a')['idpage'];
+        $lock = new Lock(StaticContainer::get(LockBackend::class), Service::LOCK_NAMESPACE);
+        self::assertTrue($lock->acquireLock('1'));
+
+        try {
+            $this->api->removePreprocessedPage(1, $idPage);
+            $this->fail('Expected removing to fail while the site lock is held');
+        } catch (PreprocessedPagesBusyException $e) {
+            self::assertSame(409, $e->getCode());
+        } finally {
+            $lock->unlock();
+        }
+
+        self::assertSame(['https://example.com/a'], $this->getUrls(1));
+        $this->api->removePreprocessedPage(1, $idPage);
+        self::assertSame([], $this->getUrls(1));
+    }
+
+    public function testChangesOfTheScheduledRebuildsOfAllWebsitesWaitForEachOther(): void
+    {
+        $lock = new Lock(StaticContainer::get(LockBackend::class), Service::LOCK_NAMESPACE);
+        self::assertTrue($lock->acquireLock('reArchiveList'));
+
+        try {
+            $this->api->addPreprocessedPage(2, 'https://example.org/a');
+            $this->fail('Expected adding to fail while the scheduled rebuilds are changed');
+        } catch (PreprocessedPagesBusyException $e) {
+            self::assertSame(409, $e->getCode());
+        } finally {
+            $lock->unlock();
+        }
+
+        // nothing was written
+        self::assertSame([], $this->getUrls(2));
+        $this->api->addPreprocessedPage(2, 'https://example.org/a');
+        self::assertSame(['https://example.org/a'], $this->getUrls(2));
+    }
+
     public function testDeletingAUserClearsTheLoginThatAddedPages(): void
     {
         UsersManagerAPI::getInstance()->addUser('alice', 'secret-password-1', 'alice@example.com');
