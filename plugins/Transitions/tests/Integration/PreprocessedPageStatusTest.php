@@ -296,6 +296,36 @@ class PreprocessedPageStatusTest extends IntegrationTestCase
         }
     }
 
+    public function testAWebsiteCronArchivingSkipsCountsAsWithoutCronOnceItsFirstPageIsOlder(): void
+    {
+        Config::getInstance()->General['enable_browser_archiving_triggering'] = 1;
+        $this->api->addPreprocessedPage(1, 'https://example.com/selected');
+
+        $start = Date::now()->getTimestamp();
+        try {
+            // core:archive runs, for example with --skip-idsites=1, so it records nothing for website 1
+            Date::$now = $start + ArchivingMode::CRON_RECENT_SECONDS - 60;
+            Option::set(CronArchive::OPTION_ARCHIVING_FINISHED_TS, (string) Date::$now);
+            self::assertSame(RebuildWindow::getMonths(), $this->getRearchiveMonths(1));
+
+            Date::$now = $start + ArchivingMode::CRON_RECENT_SECONDS + 60;
+            Option::set(CronArchive::OPTION_ARCHIVING_FINISHED_TS, (string) Date::$now);
+            self::assertSame(0, $this->getRearchiveMonths(1));
+            // a website without pages counts the install's runs
+            self::assertSame(RebuildWindow::getMonths(), $this->getRearchiveMonths(2));
+
+            // also a run that ended with errors
+            Option::delete(CronArchive::OPTION_ARCHIVING_FINISHED_TS);
+            self::assertSame(0, $this->getRearchiveMonths(2));
+            Option::set(CronArchive::OPTION_ARCHIVING_STARTED_TS, (string) Date::$now);
+            self::assertSame(RebuildWindow::getMonths(), $this->getRearchiveMonths(2));
+        } finally {
+            Date::$now = null;
+            Option::delete(CronArchive::OPTION_ARCHIVING_FINISHED_TS);
+            Option::delete(CronArchive::OPTION_ARCHIVING_STARTED_TS);
+        }
+    }
+
     public function testWithoutCronArchivingOnlyNewDataIsProcessed(): void
     {
         $this->setRole('admin', 1);

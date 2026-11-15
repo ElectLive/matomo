@@ -38,8 +38,9 @@ final class ArchivingMode
     /**
      * Browser requests archive, and `core:archive` hasn't gone through the website recently. Browser triggering alone
      * says nothing, as installs with cron archiving often keep it on, and cron may archive only some websites. The time
-     * cron went through the website is recorded only for websites with selected pages; until then, the last successful
-     * `core:archive` run of the install counts.
+     * cron went through the website is recorded only for websites with selected pages. Until then, the last
+     * `core:archive` run of the install counts, while the website has no page or added its first one recently: a
+     * website `core:archive` skips gets no record, and counts as without cron once its pages are older.
      */
     public static function isWithoutCron(int $idSite): bool
     {
@@ -47,12 +48,19 @@ final class ArchivingMode
             return false;
         }
 
+        $now = Date::now()->getTimestamp();
         $lastArchived = Option::get(self::OPTION_PREFIX . $idSite);
         if (!is_numeric($lastArchived)) {
-            $lastArchived = Option::get(CronArchive::OPTION_ARCHIVING_FINISHED_TS);
+            $oldestPageCreated = StaticContainer::get(Dao::class)->getOldestPageCreatedDate($idSite);
+            if ($oldestPageCreated !== null && $now - Date::factory($oldestPageCreated)->getTimestamp() > self::CRON_RECENT_SECONDS) {
+                return true;
+            }
+
+            // also a run that ended with errors went through the websites
+            $lastArchived = max((int) Option::get(CronArchive::OPTION_ARCHIVING_FINISHED_TS), (int) Option::get(CronArchive::OPTION_ARCHIVING_STARTED_TS)) ?: null;
         }
 
-        return !is_numeric($lastArchived) || Date::now()->getTimestamp() - (int) $lastArchived > self::CRON_RECENT_SECONDS;
+        return !is_numeric($lastArchived) || $now - (int) $lastArchived > self::CRON_RECENT_SECONDS;
     }
 
     /**

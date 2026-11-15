@@ -65,6 +65,19 @@ class Dao
     }
 
     /**
+     * @return string|null the UTC time the website's oldest page that isn't removed was added
+     */
+    public function getOldestPageCreatedDate(int $idSite): ?string
+    {
+        $date = $this->readIfTableExists(
+            fn() => Db::fetchOne('SELECT MIN(created_date) FROM ' . $this->getTable() . ' WHERE idsite = ? AND removed_date IS NULL', [$idSite]),
+            null
+        );
+
+        return is_string($date) ? $date : null;
+    }
+
+    /**
      * @param list<int> $idSites
      * @return list<int> the websites among them with pages, also removed ones
      */
