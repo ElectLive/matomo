@@ -387,7 +387,7 @@ class Model
      */
     public function updateRangeArchiveAsInvalidated($archiveTable, $idSites, $allPeriodsToInvalidate, ?Segment $segment = null, ?string $name = null): void
     {
-        if (empty($idSites) || (!empty($name) && str_contains($name, '.'))) {
+        if (empty($idSites) || !empty(explode('.', (string) $name, 2)[1] ?? null)) {
             return;
         }
 

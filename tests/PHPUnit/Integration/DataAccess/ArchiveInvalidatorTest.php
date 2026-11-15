@@ -1035,6 +1035,8 @@ class ArchiveInvalidatorTest extends IntegrationTestCase
         yield 'all plugins' => [null, ArchiveWriter::DONE_INVALIDATED];
         yield 'a plugin' => ['ExamplePlugin', ArchiveWriter::DONE_INVALIDATED];
         yield 'a single report' => ['ExamplePlugin.someData', ArchiveWriter::DONE_OK];
+        // marks the plugin's archives, as an empty report does
+        yield 'a plugin with an empty report' => ['ExamplePlugin.', ArchiveWriter::DONE_INVALIDATED];
     }
 
     public function testMarkArchivesAsInvalidatedAddsInvalidationEntriesButDoesNotMarkArchivesAsInvalidatedIfArchiveIsPartial()
